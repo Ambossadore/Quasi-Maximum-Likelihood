@@ -113,6 +113,8 @@ def S_func(trans, order):
             large_solution = np.zeros((sol[j].shape[0], dim1, dim2))
             large_solution[np.ix_(np.arange(sol[j].shape[0]), locations1[i], locations2[j])] = sol[j]
             S[i, j] = np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
+
+    S[0, 0] = 1
     return S
 
 
@@ -240,10 +242,63 @@ for mu_tild in tqdm(mu_tilde):
 result6 = mult_pow(Xt, lamb) * np.sum(temp)
 
 
-S_mat = S_func(Y, order=4)
-S_mat_d = S_func(C, order=4)
+def S_func(trans, order):
+    dim1, dim2 = trans.shape
+    dict1, dict2 = return_dict(dim1, order), return_dict(dim2, order)
+    raw_collections1 = np.array([np.sort(dict1[i][dict1[i] != 0]).tolist() for i in range(n_dim(dim1, order=4))], dtype=object)
+    raw_collections2 = np.array([np.sort(dict2[i][dict2[i] != 0]).tolist() for i in range(n_dim(dim2, order=4))], dtype=object)
+    locations1 = [np.where(np.in1d(dict1[i], raw_collections1[i]))[0][np.argsort(dict1[i][dict1[i] != 0])] for i in range(n_dim(dim1, order=4))]
+    locations2 = [np.where(np.in1d(dict2[i], raw_collections2[i]))[0][np.argsort(dict2[i][dict2[i] != 0])] for i in range(n_dim(dim2, order=4))]
+    collections1 = np.array([x for i, x in enumerate(raw_collections1.tolist()) if x not in raw_collections1.tolist()[:i]], dtype=object)
+    collections2 = np.array([x for i, x in enumerate(raw_collections2.tolist()) if x not in raw_collections2.tolist()[:i]], dtype=object)
+    coll_locator1 = np.array([collections1.tolist().index(x) for x in raw_collections1])
+    coll_locator2 = np.array([collections2.tolist().index(x) for x in raw_collections2])
+
+    raw_combinations = np.array(list(product(collections1, collections2)), dtype=object)
+    coll_combinations = np.array(sum([list(product(list(compress(collections1, [np.sum(coll) == i for coll in collections1])), list(compress(collections2, [np.sum(coll) == i for coll in collections2])))) for i in range(1, 5)], []), dtype=object)
+    raw_comb_locator = []
+    for comb in raw_combinations:
+        try:
+            index = np.where(np.all(coll_combinations == comb, axis=1))[0][0]
+        except IndexError:
+            index = -1
+        raw_comb_locator.append(index)
+    raw_comb_locator = np.array(raw_comb_locator)
+    solutions = []
+
+    for comb in coll_combinations:
+        dim_mat = len(comb[1]), len(comb[0])
+        A = np.zeros((np.sum(dim_mat), np.prod(dim_mat)))
+        A[np.repeat(np.arange(dim_mat[0]), dim_mat[1]), np.arange(A.shape[1])] = 1
+        A[np.tile(np.arange(dim_mat[1]), dim_mat[0]) + dim_mat[0], np.arange(A.shape[1])] = 1
+        b = np.hstack((comb[1], comb[0]))
+        R = np.eye(A.shape[1])
+        sol = solve_int(A, b, R)
+        sol = sol.reshape((sol.shape[0], dim_mat[0], dim_mat[1]))
+        solutions.append(np.transpose(sol, axes=(0, 2, 1)))
+
+    solutions = np.array(solutions, dtype=object)
+
+    I, J = np.meshgrid(np.arange(n_dim(dim1, order=4)), np.arange(n_dim(dim2, order=4)))
+    S = np.zeros((n_dim(dim1, order=4), n_dim(dim2, order=4)))
+    for i in trange(n_dim(dim1, order=4)):
+        index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections1[coll_locator1[I[:, i]]], collections2[coll_locator2[J[:, i]]]]).T, -2)).all(-1))[-1]
+        sol_locator = raw_comb_locator[index_in_raw_comb]
+
+        sol = solutions[sol_locator]
+        for j in range(n_dim(dim2, order=4)):
+            if sol_locator[j] == -1:
+                S[i, j] = 0
+                continue
+            large_solution = np.zeros((sol[j].shape[0], dim1, dim2))
+            large_solution[np.ix_(np.arange(sol[j].shape[0]), locations1[i], locations2[j])] = sol[j]
+            S[i, j] = np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
+
+    S[0, 0] = 1
+    return S
+
+
 mu_tilde = dictk[mask(lamb_tilde, dictk, typ='leq_abs')]
-S_tilde_mat = S_func
 temp = []
 for mu_tild in tqdm(mu_tilde):
     nus = dictd[mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')]
@@ -251,6 +306,20 @@ for mu_tild in tqdm(mu_tilde):
     c_lambt_mut = np.sum([multi_binom(lamb_tilde, eta) * S_tilde(mu_tild, lamb_tilde - eta, Y) * S(nu, eta, C) * mult_pow(Xs, nu) for nu, eta in product(nus, etas)])
     temp.append(mult_pow(Zs, mu_tild) * c_lambt_mut)
 result7 = mult_pow(Xt, lamb) * np.sum(temp)
+
+
+S_mat = S_func(Y, order=4)
+S_mat_d = S_func(C, order=4)
+mu_tilde, mu_tilde_ind = dictk[mask(lamb_tilde, dictk, typ='leq_abs')], np.where(mask(lamb_tilde, dictk, typ='leq_abs'))[0]
+temp = []
+for mu_tild, mu_tild_ind in zip(mu_tilde, mu_tilde_ind):
+    nus, nus_ind = dictd[mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')], np.where(mask(lamb_tilde - mu_tild, dictd, typ='eq_abs'))[0]
+    etas, etas_ind = dictk[mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs')], np.where(mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs'))[0]
+    lamb_eta_ind = mult_to_ind(lamb_tilde - etas, dictk)
+    prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(nus_ind, lamb_eta_ind)
+    c_lambt_mut = np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * mult_pow(Xs, prod[0]) for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
+    temp.append(mult_pow(Zs, mu_tild) * c_lambt_mut)
+result8 = mult_pow(Xt, lamb) * np.sum(temp)
 
 
 # Check expectations
