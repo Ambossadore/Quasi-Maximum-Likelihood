@@ -47,6 +47,89 @@ sol_vec = np.zeros((sol.shape[0], lamb_eta.shape[0], mu_tilde.shape[0]))
 sol_vec[np.ix_(np.arange(sol.shape[0]), lamb_eta > 0, mu_tilde > 0)] = sol
 
 
+# Offline Computation of S_tilde and S
+d = 3
+k = 6
+
+np.random.seed(0)
+Y = np.random.normal(size=(k, k))
+C = np.random.normal(size=(k, d))
+Xs = np.random.normal(size=d)
+Xt = np.random.normal(size=d)
+Zs = np.random.normal(size=k)
+Zt = Y @ Zs + C @ Xs
+dictd = return_dict(d, order=4)
+dictk = return_dict(k, order=4)
+
+
+def S_func(dict1, dict2, trans):
+    raw_collections = np.array([np.sort(dictk[i][dictk[i] != 0]).tolist() for i in range(n_dim(k, order=4))], dtype=object)
+    locations = [np.where(np.in1d(dictk[i], raw_collections[i]))[0][np.argsort(dictk[i][dictk[i] != 0])] for i in range(n_dim(k, order=4))]
+    collections = np.array([x for i, x in enumerate(raw_collections.tolist()) if x not in raw_collections.tolist()[:i]], dtype=object)
+    coll_locator = np.array([collections.tolist().index(x) for x in raw_collections])
+
+    raw_combinations = np.array(list(product(collections, collections)), dtype=object)
+    coll_combinations = np.array(sum([list(product(list(compress(collections, [np.sum(coll) == i for coll in collections])), list(compress(collections, [np.sum(coll) == i for coll in collections])))) for i in range(1, 5)], []), dtype=object)
+    raw_comb_locator = []
+    for comb in raw_combinations:
+        try:
+            index = np.where(np.all(coll_combinations == comb, axis=1))[0][0]
+        except IndexError:
+            index = -1
+        raw_comb_locator.append(index)
+    raw_comb_locator = np.array(raw_comb_locator)
+    solutions = []
+
+    for comb in coll_combinations:
+        dim_mat = len(comb[1]), len(comb[0])
+        A = np.zeros((np.sum(dim_mat), np.prod(dim_mat)))
+        A[np.repeat(np.arange(dim_mat[0]), dim_mat[1]), np.arange(A.shape[1])] = 1
+        A[np.tile(np.arange(dim_mat[1]), dim_mat[0]) + dim_mat[0], np.arange(A.shape[1])] = 1
+        b = np.hstack((comb[1], comb[0]))
+        R = np.eye(A.shape[1])
+        sol = solve_int(A, b, R)
+        sol = sol.reshape((sol.shape[0], dim_mat[0], dim_mat[1]))
+        solutions.append(np.transpose(sol, axes=(0, 2, 1)))
+
+    solutions = np.array(solutions, dtype=object)
+
+    I, J = np.meshgrid(np.arange(n_dim(k, order=4)), np.arange(n_dim(k, order=4)))
+    S_tilde = np.zeros((n_dim(k, order=4), n_dim(k, order=4)))
+    for i in trange(n_dim(k, order=4)):
+        index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections[coll_locator[I[:, i]]], collections[coll_locator[J[:, i]]]]).T, -2)).all(-1))[-1]
+        sol_locator = raw_comb_locator[index_in_raw_comb]
+
+        sol = solutions[sol_locator]
+        for j in range(n_dim(k, order=4)):
+            if sol_locator[j] == -1:
+                S_tilde[i, j] = 0
+                continue
+            large_solution = np.zeros((sol[j].shape[0], k, k))
+            large_solution[np.ix_(np.arange(sol[j].shape[0]), locations[i], locations[j])] = sol[j]
+            S_tilde[i, j] = np.prod(multinom(large_solution) * mult_pow(Y, large_solution), axis=1).sum()
+    return S_tilde
+
+
+S_mat = S_func(dictk, Y)
+
+
+def S_tilde_func(mu_tilde, eta, Y):
+    dim_mat = (mu_tilde > 0).sum(), (eta > 0).sum()
+    A = np.zeros((np.sum(dim_mat), np.prod(dim_mat)))
+    A[np.repeat(np.arange(dim_mat[0]), dim_mat[1]), np.arange(A.shape[1])] = 1
+    A[np.tile(np.arange(dim_mat[1]), dim_mat[0]) + dim_mat[0], np.arange(A.shape[1])] = 1
+    b = np.hstack((mu_tilde[mu_tilde > 0], eta[eta > 0]))
+    R = np.eye(A.shape[1])
+    sol = solve_int(A, b, R)
+    sol = sol.reshape((sol.shape[0], dim_mat[0], dim_mat[1]))
+    sol = np.transpose(sol, axes=(0, 2, 1))
+
+    sol_vec = np.zeros((sol.shape[0], eta.shape[0], mu_tilde.shape[0]))
+    sol_vec[np.ix_(np.arange(sol.shape[0]), eta > 0, mu_tilde > 0)] = sol
+
+    return np.prod(multinom(sol_vec) * mult_pow(Y, sol_vec), axis=1).sum()
+
+
 # Check equations
 d = 3
 k = 6
@@ -132,116 +215,15 @@ for mu_tild in tqdm(mu_tilde):
     temp.append(mult_pow(Zs, mu_tild) * c_lambt_mut)
 result6 = mult_pow(Xt, lamb) * np.sum(temp)
 
-
-# Offline Computation of S_tilde and S
-d = 3
-k = 6
-
-np.random.seed(0)
-Y = np.random.normal(size=(k, k))
-C = np.random.normal(size=(k, d))
-Xs = np.random.normal(size=d)
-Xt = np.random.normal(size=d)
-Zs = np.random.normal(size=k)
-Zt = Y @ Zs + C @ Xs
-dictd = return_dict(d, order=4)
-dictk = return_dict(k, order=4)
-
-tic = time()
-raw_collections = np.array([np.sort(dictk[i][dictk[i] != 0]).tolist() for i in range(n_dim(k, order=4))], dtype=object)
-locations = [np.where(np.in1d(dictk[i], raw_collections[i]))[0][np.argsort(dictk[i][dictk[i] != 0])] for i in range(n_dim(k, order=4))]
-collections = np.array([x for i, x in enumerate(raw_collections.tolist()) if x not in raw_collections.tolist()[:i]], dtype=object)
-coll_locator = np.array([collections.tolist().index(x) for x in raw_collections])
-
-raw_combinations = np.array(list(product(collections, collections)), dtype=object)
-coll_combinations = np.array(sum([list(product(list(compress(collections, [np.sum(coll) == i for coll in collections])), list(compress(collections, [np.sum(coll) == i for coll in collections])))) for i in range(1, 5)], []), dtype=object)
-raw_comb_locator = []
-for comb in raw_combinations:
-    try:
-        index = np.where(np.all(coll_combinations == comb, axis=1))[0][0]
-    except IndexError:
-        index = -1
-    raw_comb_locator.append(index)
-raw_comb_locator = np.array(raw_comb_locator)
-solutions = []
-
-for comb in coll_combinations:
-    dim_mat = len(comb[1]), len(comb[0])
-    A = np.zeros((np.sum(dim_mat), np.prod(dim_mat)))
-    A[np.repeat(np.arange(dim_mat[0]), dim_mat[1]), np.arange(A.shape[1])] = 1
-    A[np.tile(np.arange(dim_mat[1]), dim_mat[0]) + dim_mat[0], np.arange(A.shape[1])] = 1
-    b = np.hstack((comb[1], comb[0]))
-    R = np.eye(A.shape[1])
-    sol = solve_int(A, b, R)
-    sol = sol.reshape((sol.shape[0], dim_mat[0], dim_mat[1]))
-    solutions.append(np.transpose(sol, axes=(0, 2, 1)))
-
-solutions = np.array(solutions, dtype=object)
-
-# I, J = np.meshgrid(np.arange(n_dim(k, order=4)), np.arange(n_dim(k, order=4)))
-# index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections[coll_locator[I]], collections[coll_locator[J]]]).T, -2)).all(-1))[-1].reshape((n_dim(k, order=4), n_dim(k, order=4)))
-# sol_locator = raw_comb_locator[index_in_raw_comb]
-#
-# sol = solutions[sol_locator[J, I]]
-# S_tilde = np.zeros((n_dim(k, order=4), n_dim(k, order=4)))
-# for i in trange(n_dim(k, order=4)):
-#     for j in range(n_dim(k, order=4)):
-#         if sol_locator[i, j] == -1:
-#             S_tilde[i, j] = 0
-#             continue
-#         large_solution = np.zeros((sol[i, j].shape[0], k, k))
-#         large_solution[np.ix_(np.arange(sol[i, j].shape[0]), locations[i], locations[j])] = sol[i, j]
-#         S_tilde[i, j] = np.prod(multinom(large_solution) * mult_pow(Y, large_solution), axis=1).sum()
-
-I, J = np.meshgrid(np.arange(n_dim(k, order=4)), np.arange(n_dim(k, order=4)))
-S_tilde = np.zeros((n_dim(k, order=4), n_dim(k, order=4)))
-for i in trange(n_dim(k, order=4)):
-    index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections[coll_locator[I[:, i]]], collections[coll_locator[J[:, i]]]]).T, -2)).all(-1))[-1]
-    sol_locator = raw_comb_locator[index_in_raw_comb]
-
-    sol = solutions[sol_locator]
-    for j in range(n_dim(k, order=4)):
-        if sol_locator[j] == -1:
-            S_tilde[i, j] = 0
-            continue
-        large_solution = np.zeros((sol[j].shape[0], k, k))
-        large_solution[np.ix_(np.arange(sol[j].shape[0]), locations[i], locations[j])] = sol[j]
-        S_tilde[i, j] = np.prod(multinom(large_solution) * mult_pow(Y, large_solution), axis=1).sum()
-
-toc = time()
-print(toc - tic)
-
-I, J = np.meshgrid(np.arange(n_dim(k, order=4)), np.arange(n_dim(k, order=4)))
-S_tilde = np.zeros((n_dim(k, order=4), n_dim(k, order=4)))
-for i in trange(n_dim(k, order=4)):
-    index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections[coll_locator[I[:, i]]], collections[coll_locator[J[:, i]]]]).T, -2)).all(-1))[-1]
-    sol_locator = raw_comb_locator[index_in_raw_comb]
-
-    sol = solutions[sol_locator]
-    for j in range(n_dim(k, order=4)):
-        print(j)
-        if sol_locator[j] == -1:
-            S_tilde[i, j] = 0
-            continue
-        large_solution = np.zeros((sol[j].shape[0], k, k))
-        large_solution2[np.ix_(np.arange(sol[j].shape[0]), locations[i], locations[j])] = sol[j]
-        S_tilde[i, j] = np.prod(multinom(large_solution) * mult_pow(Y, large_solution), axis=1).sum()
-
-def S_tilde_func(mu_tilde, eta, Y):
-    dim_mat = (mu_tilde > 0).sum(), (eta > 0).sum()
-    A = np.zeros((np.sum(dim_mat), np.prod(dim_mat)))
-    A[np.repeat(np.arange(dim_mat[0]), dim_mat[1]), np.arange(A.shape[1])] = 1
-    A[np.tile(np.arange(dim_mat[1]), dim_mat[0]) + dim_mat[0], np.arange(A.shape[1])] = 1
-    b = np.hstack((mu_tilde[mu_tilde > 0], eta[eta > 0]))
-    R = np.eye(A.shape[1])
-    sol = solve_int(A, b, R)
-    sol = sol.reshape((sol.shape[0], dim_mat[0], dim_mat[1]))
-    sol = np.transpose(sol, axes=(0, 2, 1))
-
-    sol_vec = np.zeros((sol.shape[0], eta.shape[0], mu_tilde.shape[0]))
-    sol_vec[np.ix_(np.arange(sol.shape[0]), eta > 0, mu_tilde > 0)] = sol
-
-    return np.prod(multinom(sol_vec) * mult_pow(Y, sol_vec), axis=1).sum()
+mu_tilde = dictk[mask(lamb_tilde, dictk, typ='leq_abs')]
+S_tilde_mat = S_func
+temp = []
+for mu_tild in tqdm(mu_tilde):
+    nus = dictd[mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')]
+    etas = dictk[mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs')]
+    c_lambt_mut = np.sum([multi_binom(lamb_tilde, eta) * S_tilde(mu_tild, lamb_tilde - eta, Y) * S(nu, eta, C) * mult_pow(Xs, nu) for nu, eta in product(nus, etas)])
+    temp.append(mult_pow(Zs, mu_tild) * c_lambt_mut)
+result7 = mult_pow(Xt, lamb) * np.sum(temp)
 
 
 # Check expectations
