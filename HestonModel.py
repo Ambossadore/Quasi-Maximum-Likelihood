@@ -1151,9 +1151,10 @@ class HestonModel(PolynomialModel):
 
 
 class FilteredHestonModel(PolynomialModel):
-    def __init__(self, first_observed, kappa, theta_vol, sig, rho, v0):
+    def __init__(self, first_observed, kappa, theta_vol, sig, rho, v0, wrt):
         self.true_param = np.array([kappa, theta_vol**2, sig, rho])
         self.x = np.array([v0, 0, 0])
+        self.wrt = wrt
 
         super().__init__(first_observed, self.true_param, self.x)
         self.v0 = v0
@@ -1164,15 +1165,23 @@ class FilteredHestonModel(PolynomialModel):
         self.model_name = 'FilteredHestonModel'
         self.observations = None
         self.seed = None
-        self.B = None
+        self.filter_c = None
+        self.filter_B = None
 
         self.underlying_model = HestonModel(first_observed, kappa, theta_vol, sig, rho, v0)
 
 
+    def calc_filter_params(self):
+        a_0 = self.underlying_model.a(self.true_param, order=0)
+        a_1 = self.underlying_model.a(self.param, order=1, wrt=wrt)
+        self.filter_c = np.append(a_0, a_1)
+
+
+
+
+
     def calc_filter_B(self, param, wrt, Y, C, c=None, order=4):
-        a_0 = self.underlying_model.a(param, order=0)
-        a_1 = self.underlying_model.a(param, order=1, wrt=wrt)
-        c = np.append(a_0, a_1)
+
 
         k, d = C.shape
         B = self.B
