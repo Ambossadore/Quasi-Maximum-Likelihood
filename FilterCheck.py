@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.special import factorial
 from functions import *
 from itertools import product, compress
 from z3 import Int, Solver, And, Or, Sum, sat
@@ -6,7 +7,7 @@ from tqdm import tqdm, trange
 from time import time
 
 
-def solve_int(A, b, R=None, maxnumsol=20):
+def solve_int(A, b, R=None, maxnumsol=24):
     """Solves a constrained linear system of equations Ax = b, Rx >= 0, over the integers"""
 
     m, n = np.shape(A)
@@ -419,23 +420,38 @@ result8 = mult_pow(Xt, lamb) * np.sum(temp)
 
 
 # Check expectations
-d = 3
-k = 6
-
-dictd = return_dict(d, order=4)
-dictk = return_dict(k, order=4)
+d = 2
+k = 4
 
 np.random.seed(0)
 Y = np.random.normal(size=(k, k))
 C = np.random.normal(size=(k, d))
 Xs = np.random.normal(size=d)
+Xt = np.random.normal(size=d)
 Zs = np.random.normal(size=k)
-Zt = Y @ Zs + C @ Xs
-B = np.random.normal(size=(dictd.shape[0], dictd.shape[0]))
+B = np.random.normal(size=(n_dim(d, order=4), n_dim(d, order=4)))
+c = np.random.normal(size=k)
+Zt = c + Y @ Zs + C @ Xs
+
+dictd = return_dict(d, order=4)
+dictk = return_dict(k, order=4)
 
 
-def calc_filter_B(B, Y, C, order):
+def calc_filter_B(B, Y, C, c=None, order=4):
     k, d = C.shape
+    if c is not None:
+        C = np.vstack((C, np.repeat(0, d)))
+        Y = np.vstack((Y, np.repeat(0, k)))
+        c = np.append(c, 1)[:, None]
+        Y = np.hstack((Y, c))
+        k += 1
+        t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order) + n_dim(d + k - 1, order), desc='Calculating S')
+    else:
+        t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order), desc='Calculating S')
+
+    dictd = return_dict(d, order)
+    dictk = return_dict(k, order)
+
     B_large = np.zeros((n_dim(d + k, order), n_dim(d + k, order)))
     dict_large = return_dict(d + k, order)
 
@@ -470,7 +486,7 @@ def calc_filter_B(B, Y, C, order):
             A[np.tile(np.arange(dim_mat[1]), dim_mat[0]) + dim_mat[0], np.arange(A.shape[1])] = 1
             b = np.hstack((comb[1], comb[0]))
             R = np.eye(A.shape[1])
-            sol = solve_int(A, b, R)
+            sol = solve_int(A, b, R, maxnumsol=factorial(order))
             sol = sol.reshape((sol.shape[0], dim_mat[0], dim_mat[1]))
             solutions.append(np.transpose(sol, axes=(0, 2, 1)))
 
@@ -495,7 +511,6 @@ def calc_filter_B(B, Y, C, order):
         S[0, 0] = 1
         return S
 
-    t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order), desc='Calculating S')
     S_mat = S_func(Y, order)
     S_mat_d = S_func(C, order)
 
@@ -516,14 +531,27 @@ def calc_filter_B(B, Y, C, order):
             prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
             B_large[i, mu_loc] = np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
 
-    return B_large
+    if c is not None:
+        B_final = np.zeros((n_dim(d + k - 1, order), n_dim(d + k - 1, order)))
+        dict_final = return_dict(d + k - 1, order)
+        t.set_description('Incorporating c')
+        for i in range(n_dim(d + k - 1, order)):
+            t.update(1)
+            lamb_ind = dict_final[i]
+            mu_inds, mu_locs = dict_final[mask(lamb_ind, dict_final, typ='leq_abs')], np.where(mask(lamb_ind, dict_final, typ='leq_abs'))[0]
+            for mu_ind, mu_loc in zip(mu_inds, mu_locs):
+                B_final[i, mu_loc] = B_large[mult_to_ind(np.append(lamb_ind, 0), dict_large), np.where((dict_large[:, :-1] == np.atleast_2d(mu_ind)[:, None]).all(-1))[1]].sum()
+    else:
+        B_final = B_large
+
+    return B_final
 
 
-B_large = calc_filter_B(B, Y, C, order=4)
+B_large = calc_filter_B(B, Y, C, c, order=4)
 dict_large = return_dict(d + k, order=4)
 
-lamb = np.array([0, 0, 0])
-lamb_tilde = np.array([0, 0, 2, 2, 0, 0])
+lamb = np.array([1, 1])
+lamb_tilde = np.array([0, 2, 0, 0])
 
 mu_indices = dictd[mask(lamb, dictd, typ='leq_abs')]
 result = B[mult_to_ind(lamb, dictd), mult_to_ind(mu_indices, dictd)] @ mult_pow(Xs, mu_indices) * mult_pow(Zt, lamb_tilde)
@@ -531,3 +559,13 @@ result = B[mult_to_ind(lamb, dictd), mult_to_ind(mu_indices, dictd)] @ mult_pow(
 lamb_large = np.append(lamb, lamb_tilde)
 mu_large = dict_large[mask(lamb_large, dict_large, typ='leq_abs')]
 result_test = B_large[mult_to_ind(lamb_large, dict_large), mult_to_ind(mu_large, dict_large)] @ mult_pow(np.append(Xs, Zs), mu_large)
+
+lamb = np.array([0, 0])
+lamb_tilde = np.array([0, 1, 1, 1, 1])
+mu_indices = dictd[mask(lamb, dictd, typ='leq_abs')]
+result = B[mult_to_ind(lamb, dictd), mult_to_ind(mu_indices, dictd)] @ mult_pow(Xs, mu_indices) * mult_pow(Zt, lamb_tilde)
+
+lamb_large = np.append(lamb, lamb_tilde)
+mu_large = dict_final[mask(lamb_large, dict_final, typ='leq_abs')]
+result_test1 = B_large_check[mult_to_ind(lamb_large, dict_final), mult_to_ind(mu_large, dict_final)] @ mult_pow(np.append(Xs, Zs), mu_large)
+result_test2 = B_final[mult_to_ind(lamb_large, dict_final), mult_to_ind(mu_large, dict_final)] @ mult_pow(np.append(Xs, Zs), mu_large)
