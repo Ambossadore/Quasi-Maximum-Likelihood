@@ -1,6 +1,7 @@
 import numpy as np
 from functions import *
 from scipy.linalg import expm
+from scipy.special import factorial
 from tqdm import tqdm, trange
 from functools import partial
 from z3 import Int, Solver, And, Or, Sum, sat
@@ -1167,6 +1168,8 @@ class FilteredHestonModel(PolynomialModel):
         self.observations = None
         self.seed = None
         self.filter_c = None
+        self.filter_C = None
+        self.filter_Y = None
         self.filter_B = None
 
         self.underlying_model = HestonModel(first_observed, kappa, theta_vol, sig, rho, v0)
@@ -1181,25 +1184,35 @@ class FilteredHestonModel(PolynomialModel):
 
     def calc_filter_params(self):
         a_0 = self.underlying_model.a(self.true_param, order=0)
-        a_1 = self.underlying_model.a(self.param, order=1, wrt=self.wrt)
-        self.filter_c = np.append(a_0, a_1)
+        a_1 = self.underlying_model.a(self.true_param, order=1, wrt=self.wrt)
+        self.filter_c = np.append(a_0, a_1.flatten())
 
         A_0 = self.kalman_filter.K_lim @ self.kalman_filter.H
         A_00 = self.kalman_filter.F_lim
 
         S = self.kalman_filter.S_star(wrt=self.wrt)
         Sig = self.kalman_filter.Sig_tp1_t_lim
-        S_tilde = np.linalg.inv(Sig[self.first_observed:, self.first_observed:]) @ S[self.first_observed:, self.first_observed:] @ np.linalg.inv(Sig[self.first_observed:, self.first_observed:])
+        Sig_inv = np.linalg.inv(Sig[self.first_observed:, self.first_observed:])
+        S_tilde = Sig_inv @ S[:, self.first_observed:, self.first_observed:] @ Sig_inv
 
-        # A_1 =
+        A_1 = (self.underlying_model.A(self.true_param, order=1, wrt=self.wrt) @ Sig[:, self.first_observed:] @ Sig_inv + self.underlying_model.A(self.true_param) @ (S[:, :, self.first_observed:] @ Sig_inv - Sig[:, self.first_observed:] @ S_tilde)) @ self.kalman_filter.H
+        A_10 = self.underlying_model.A(self.true_param, order=1, wrt=self.wrt) @ (np.eye(3) - Sig[:, self.first_observed:] @ Sig_inv @ self.kalman_filter.H) - self.underlying_model.A(self.true_param) @ (S[:, :, self.first_observed:] @ Sig_inv - Sig[:, self.first_observed:] @ S_tilde) @ self.kalman_filter.H
+        A_11 = self.kalman_filter.F_lim
 
+        self.filter_C = np.block([[A_0], [np.vstack(A_1)]])
+        self.filter_Y = np.block([[A_00, np.zeros((3, 3 * np.size(self.wrt)))], [np.vstack(A_10), np.kron(np.eye(np.size(self.wrt)), A_11)]])
 
-    def calc_filter_B(self, param, wrt, Y, C, c=None, order=4):
+    def calc_filter_B(self, order=4):
+        if (self.filter_c is None) | (self.filter_C is None) | (self.filter_Y is None):
+            raise Exception('Method calc_filter_params has to be called first.')
 
+        C = self.filter_C
+        c = self.filter_c
+        Y = self.filter_Y
 
         k, d = C.shape
-        B = self.B
-        if c is not None:
+        B = self.underlying_model.B(param=self.true_param, order=order)
+        if not np.any(self.filter_c):
             C = np.vstack((C, np.repeat(0, d)))
             Y = np.vstack((Y, np.repeat(0, k)))
             c = np.append(c, 1)[:, None]
@@ -1291,7 +1304,7 @@ class FilteredHestonModel(PolynomialModel):
                 prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
                 B_large[i, mu_loc] = np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
 
-        if c is not None:
+        if not np.any(self.filter_c):
             B_final = np.zeros((n_dim(d + k - 1, order), n_dim(d + k - 1, order)))
             dict_final = return_dict(d + k - 1, order)
             t.set_description('Incorporating c')
@@ -1304,10 +1317,11 @@ class FilteredHestonModel(PolynomialModel):
         else:
             B_final = B_large
 
-        return B_final
+        self.filter_B = B_final
 
 
 # heston = HestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.3**2)
 
 hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.3**2, wrt=np.array([1, 2]))
 hestonf.calc_filter_params()
+hestonf.calc_filter_B(order=4)
