@@ -1216,7 +1216,7 @@ class FilteredHestonModel(PolynomialModel):
 
         k, d = C.shape
         B = self.underlying_model.B(param=self.true_param, order=order)
-        if not np.any(self.filter_c):
+        if np.any(self.filter_c):
             C = np.vstack((C, np.repeat(0, d)))
             Y = np.vstack((Y, np.repeat(0, k)))
             c = np.append(c, 1)[:, None]
@@ -1308,7 +1308,7 @@ class FilteredHestonModel(PolynomialModel):
                 prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
                 B_large[i, mu_loc] = np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
 
-        if not np.any(self.filter_c):
+        if np.any(self.filter_c):
             B_final = np.zeros((n_dim(d + k - 1, order), n_dim(d + k - 1, order)))
             dict_final = return_dict(d + k - 1, order)
             t.set_description('Incorporating c')
@@ -1326,9 +1326,73 @@ class FilteredHestonModel(PolynomialModel):
         self.lim_expec = np.linalg.inv(np.eye(B_final.shape[0] - 1) - B_final[1:, 1:]) @ B_final[1:, 0]
 
 
-hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.3**2, wrt=2)
+hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=2)
 hestonf.calc_filter_params()
 hestonf.calc_filter_B(order=4)
 
 
+## Monte Carlo Checkup
 
+def simulate_heston(samples, T, dt, v0, kappa, theta, sigma, rho, antithetic=False):
+    if 2 * theta * kappa < sigma ** 2:
+        warnings.warn('Feller Positivity Condition is not met (2 * theta * kappa < sigma**2)')
+
+    steps = int(np.ceil(T / dt)) + 1
+
+    W = np.random.multivariate_normal(mean=[0, 0], cov=[[1, rho], [rho, 1]], size=(samples, steps))
+    dW1, dW2 = W[:, :, 0] * np.sqrt(dt), W[:, :, 1] * np.sqrt(dt)
+    if antithetic:
+        dW1, dW2 = np.vstack((dW1, -dW1)), np.vstack((dW2, -dW2))
+        samples = 2 * samples
+    S = np.empty(shape=(samples, steps))
+    v = np.empty(shape=(samples, steps))
+    S[:, 0] = 0
+    v[:, 0] = v0
+    for timestep in trange(1, steps):
+        v[:, timestep] = np.maximum(v[:, timestep - 1] + kappa * (theta - v[:, timestep - 1]) * dt + sigma * np.sqrt(v[:, timestep - 1]) * dW1[:, timestep - 1], 0)
+        S[:, timestep] = S[:, timestep - 1] + np.sqrt(v[:, timestep - 1]) * dW2[:, timestep - 1]
+    return v, S
+
+
+t0 = 0
+t = 100
+dt = 1 / 100
+v0 = 0.4**2
+kappa = 1
+theta = 0.4**2
+sigma = 0.3
+rho = -0.5
+
+samples = 10000
+
+v, S = simulate_heston(samples, t - t0, dt, v0, kappa, theta, sigma, rho)
+v_final = v[:, ::100]
+Y_final = np.hstack((np.repeat(0, 10000)[:, None], np.diff(S[:, ::100])))
+Y_final2 = Y_final**2
+observations = np.stack((v_final, Y_final, Y_final2), axis=0).T
+
+filter = hestonf.kalman_filter
+
+x = np.array([v0, 0, 0])
+t_max = observations.shape[0]
+observations = observations[..., filter.first_observed:]
+X_hat_tp1_t_list_hom = [np.tile(x, (10000, 1)), np.tile(filter.a() + filter.A() @ x, (10000, 1))]
+X_hat_tp1_t = X_hat_tp1_t_list_hom[-1]
+Sig_inv = np.linalg.inv(filter.Sig_tp1_t_lim[filter.first_observed:, filter.first_observed:])
+Sig_tp1_t_lim_o = filter.Sig_tp1_t_lim[:, filter.first_observed:]
+tr = tqdm(total=t_max - 1)
+tr.update(1)
+for t in range(1, t_max - 1):
+    X_hat_tt = X_hat_tp1_t + (Sig_tp1_t_lim_o @ Sig_inv @ (observations[t] - X_hat_tp1_t[:, filter.first_observed:]).T).T
+    X_hat_tp1_t = filter.a() + (filter.A() @ X_hat_tt.T).T
+    X_hat_tp1_t_list_hom.append(X_hat_tp1_t)
+    tr.update(1)
+tr.close()
+
+X_hat_tp1_t = np.stack(X_hat_tp1_t_list_hom, axis=0)
+X_hat_tp1_t_final = X_hat_tp1_t[-1]
+obs_final = np.stack((v_final, Y_final, Y_final2), axis=0).T[-1]
+aug_final = np.hstack((obs_final, X_hat_tp1_t_final))
+
+aug_final[:, 0].mean()
+aug_final

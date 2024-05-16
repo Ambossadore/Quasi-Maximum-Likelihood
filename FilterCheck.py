@@ -420,8 +420,8 @@ result8 = mult_pow(Xt, lamb) * np.sum(temp)
 
 
 # Check expectations
-d = 2
-k = 4
+d = 3
+k = 6
 
 np.random.seed(0)
 Y = np.random.normal(size=(k, k))
@@ -550,8 +550,8 @@ def calc_filter_B(B, Y, C, c=None, order=4):
 B_large = calc_filter_B(B, Y, C, c, order=4)
 dict_large = return_dict(d + k, order=4)
 
-lamb = np.array([1, 1])
-lamb_tilde = np.array([0, 2, 0, 0])
+lamb = np.array([0, 0, 0])
+lamb_tilde = np.array([1, 0, 0, 0, 0, 0])
 
 mu_indices = dictd[mask(lamb, dictd, typ='leq_abs')]
 result = B[mult_to_ind(lamb, dictd), mult_to_ind(mu_indices, dictd)] @ mult_pow(Xs, mu_indices) * mult_pow(Zt, lamb_tilde)
