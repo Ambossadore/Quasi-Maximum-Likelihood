@@ -34,7 +34,7 @@ def solve_int(A, b, R=None, maxnumsol=20):
 # sigma = 0.3
 # rho = -0.5
 # mu = 0.
-# delta = -0.5
+# delta = 0
 #
 # dim = 2
 # order = 8
@@ -65,15 +65,16 @@ def solve_int(A, b, R=None, maxnumsol=20):
 # heston_B = expm(heston_Bc)
 # heston_B_diff = np.zeros(heston_B.shape)
 # heston_B_diff[:, dicts[:, 1] == 0] = heston_B[:, dicts[:, 1] == 0]
-#
+# #
 # heston_B_diff_sq = np.zeros((n_dim(dim + 1, order // 2), n_dim(dim + 1, order // 2)))
 # dicts_sq = return_dict(dim + 1, order // 2)
 # cols = np.where((dicts_sq[:, 1] == 0) & (dicts_sq[:, 2] == 0))[0]
+# cols2 = np.where((dicts[:, 1] == 0))[0][:cols.shape[0]]
 # for i in range(heston_B_diff_sq.shape[0]):
 #     lamb = ind_to_mult(i, dicts_sq)
 #     lamb_tilde = np.array([lamb[0], lamb[1] + 2 * lamb[2]])
 #     ind = mult_to_ind(lamb_tilde, dicts)
-#     heston_B_diff_sq[i, cols] = heston_B[ind, cols]
+#     heston_B_diff_sq[i, cols] = heston_B[ind, cols2]
 #
 # k = 6
 # d = 3
@@ -850,13 +851,14 @@ class HestonModel(PolynomialModel):
     @staticmethod
     def B(param, order):
         kappa, theta, sigma, rho = param
+        mu, delta = 0, 0
         dicts = return_dict(2, 2 * order)
 
         heston_A = np.zeros((n_dim(2, 2 * order), n_dim(2, 2 * order)))
         heston_A[mult_to_ind([1, 0], dicts), 0] = kappa * theta
         heston_A[mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -kappa
-        heston_A[mult_to_ind([0, 1], dicts), 0] = 0
-        heston_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = -0.5
+        heston_A[mult_to_ind([0, 1], dicts), 0] = mu
+        heston_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = delta
         heston_A[mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = sigma ** 2
         heston_A[mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = sigma * rho
         heston_A[mult_to_ind([0, 2], dicts), mult_to_ind([1, 0], dicts)] = 1
@@ -876,11 +878,12 @@ class HestonModel(PolynomialModel):
         heston_B_diff_sq = np.zeros((n_dim(3, order), n_dim(3, order)))
         dicts_sq = return_dict(3, order)
         cols = np.where((dicts_sq[:, 1] == 0) & (dicts_sq[:, 2] == 0))[0]
+        cols2 = np.where((dicts[:, 1] == 0))[0][:cols.shape[0]]
         for i in range(heston_B_diff_sq.shape[0]):
             lamb = ind_to_mult(i, dicts_sq)
             lamb_tilde = np.array([lamb[0], lamb[1] + 2 * lamb[2]])
             ind = mult_to_ind(lamb_tilde, dicts)
-            heston_B_diff_sq[i, cols] = heston_B[ind, cols]
+            heston_B_diff_sq[i, cols] = heston_B[ind, cols2]
         return heston_B_diff_sq
 
     def C(self, param, t):
@@ -1171,6 +1174,8 @@ class FilteredHestonModel(PolynomialModel):
         self.filter_C = None
         self.filter_Y = None
         self.filter_B = None
+        self.lim_expec = None
+        self.dicts = return_dict(self.dim * (np.size(wrt) + 2), order=4)
 
         self.underlying_model = HestonModel(first_observed, kappa, theta_vol, sig, rho, v0)
 
@@ -1180,7 +1185,6 @@ class FilteredHestonModel(PolynomialModel):
         partial_C_lim = partial(self.underlying_model.C_lim, param=self.true_param)
         self.kalman_filter = KalmanFilter(dim=3, a=partial_a, A=partial_A, C=partial_C, C_lim=partial_C_lim, first_observed=self.first_observed)
         self.kalman_filter.build_covariance()
-
 
     def calc_filter_params(self):
         a_0 = self.underlying_model.a(self.true_param, order=0)
@@ -1318,10 +1322,13 @@ class FilteredHestonModel(PolynomialModel):
             B_final = B_large
 
         self.filter_B = B_final
+        t.set_description('Calculating limiting power expecations')
+        self.lim_expec = np.linalg.inv(np.eye(B_final.shape[0] - 1) - B_final[1:, 1:]) @ B_final[1:, 0]
 
 
-# heston = HestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.3**2)
-
-hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.3**2, wrt=np.array([1, 2]))
+hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.3**2, wrt=2)
 hestonf.calc_filter_params()
 hestonf.calc_filter_B(order=4)
+
+
+
