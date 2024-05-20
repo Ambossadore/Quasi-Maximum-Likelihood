@@ -1325,6 +1325,29 @@ class FilteredHestonModel(PolynomialModel):
         t.set_description('Calculating limiting power expecations')
         self.lim_expec = np.linalg.inv(np.eye(B_final.shape[0] - 1) - B_final[1:, 1:]) @ B_final[1:, 0]
 
+    def calculate_U(self):
+        k = np.size(self.wrt)
+        Sig_inv = np.linalg.inv(self.kalman_filter.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
+        s_star = self.kalman_filter.S_star(wrt=self.wrt)
+
+        Gamma1 = self.kalman_filter.H.T @ Sig_inv @ self.kalman_filter.H
+        Gamma2 = np.einsum('jk, kl, ilm, mn, nr -> ijr', self.kalman_filter.H.T, Sig_inv, s_star[:, self.first_observed:, self.first_observed:], Sig_inv, self.kalman_filter.H)
+        Gammaj = np.zeros((k, self.dim * (k + 2), self.dim * (k + 2)))
+
+        for j in range(k):
+            Gamma1_stretch = np.kron(unit_vec(k=k, j=j + 1, as_column=True), Gamma1)
+            Gammaj[j, :self.dim, :] = np.hstack((Gamma2[j], -Gamma2[j], Gamma1_stretch.T))
+            Gammaj[j, self.dim:2 * self.dim, :] = -Gammaj[j, :self.dim, :]
+            Gammaj[j, 2 * self.dim:, :] = Gammaj[j, :, 2 * self.dim:].T
+        Gammaj *= 1 / 2
+
+        Gammaj_coefs = np.triu(Gammaj) + np.triu(Gammaj, 1)
+        alpha_f = np.vstack([Gammaj_coefs[j][np.triu_indices_from(Gammaj[0])] for j in range(k)])
+        alpha_f = np.hstack((np.zeros((k, self.dim * (k + 2))), alpha_f))
+
+        A_kron2 = self.filter_B[1:n_dim(self.dim * (k + 2), 2), 1:n_dim(self.dim * (k + 2), 2)]
+        alpha_g = np.einsum('ij, kj -> ki', np.linalg.inv(A_kron2 - np.eye(n_dim(self.dim * (k + 2), 2) - 1)).T, alpha_f)
+
 
 hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=2)
 hestonf.calc_filter_params()
@@ -1393,6 +1416,3 @@ X_hat_tp1_t = np.stack(X_hat_tp1_t_list_hom, axis=0)
 X_hat_tp1_t_final = X_hat_tp1_t[-1]
 obs_final = np.stack((v_final, Y_final, Y_final2), axis=0).T[-1]
 aug_final = np.hstack((obs_final, X_hat_tp1_t_final))
-
-aug_final[:, 0].mean()
-aug_final

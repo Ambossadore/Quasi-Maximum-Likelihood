@@ -47,3 +47,12 @@ def mask(mult, dicts, typ):
         return dicts.sum(axis=1) == mult.sum()
     elif typ == 'leq_abs':
         return dicts.sum(axis=1) <= mult.sum()
+
+
+def unit_vec(k, j, as_column=False):
+    vec = np.zeros(k)
+    vec[j - 1] = 1
+    if as_column:
+        return vec.reshape(-1, 1)
+    else:
+        return vec
