@@ -83,3 +83,12 @@ def cummean(arr, axis=None):
     else:
         return np.cumsum(arr) / np.arange(1, arr.shape[0] + 1)
 
+
+def sym(arr):
+    if np.ndim(arr) == 2:
+        assert arr.shape[0] == arr.shape[1]
+        return arr + arr.T
+    else:
+        assert arr.shape[1] == arr.shape[2]
+        return arr + np.transpose(arr, (0, 2, 1))
+
