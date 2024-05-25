@@ -44,9 +44,9 @@ def mask(mult, dicts, typ):
     if typ == 'leq':
         return np.all(dicts <= mult, axis=1)
     elif typ == 'eq_abs':
-        return dicts.sum(axis=1) == mult.sum()
+        return dicts.sum(axis=1) == np.sum(mult)
     elif typ == 'leq_abs':
-        return dicts.sum(axis=1) <= mult.sum()
+        return dicts.sum(axis=1) <= np.sum(mult)
 
 
 def unit_vec(k, j, as_column=False):
@@ -56,3 +56,30 @@ def unit_vec(k, j, as_column=False):
         return vec.reshape(-1, 1)
     else:
         return vec
+
+
+def tracy_singh(A, B, A_partition, B_partition):
+    num_blocks_A = (A.shape[0] // A_partition[0], A.shape[1] // A_partition[1])
+    num_blocks_B = (B.shape[0] // B_partition[0], B.shape[1] // B_partition[1])
+    partition_A = [np.split(arr, num_blocks_A[1], axis=1) for arr in np.split(A, num_blocks_A[0])]
+    partition_B = [np.split(arr, num_blocks_B[1], axis=1) for arr in np.split(B, num_blocks_B[0])]
+    result = np.zeros((A.shape[0] * B.shape[0], A.shape[1] * B.shape[1]))
+    size_blocks = (A_partition[0] * B_partition[0], A_partition[1] * B_partition[1])
+    for i in range(num_blocks_A[0] * num_blocks_B[0]):
+        for j in range(num_blocks_A[1] * num_blocks_B[1]):
+            A_block_num = (i // num_blocks_B[0], j // num_blocks_B[1])
+            B_block_num = (i % num_blocks_B[0], j % num_blocks_B[1])
+            A_block = partition_A[A_block_num[0]][A_block_num[1]]
+            B_block = partition_B[B_block_num[0]][B_block_num[1]]
+            result[i * size_blocks[0]:(i + 1) * size_blocks[0], j * size_blocks[1]:(j + 1) * size_blocks[1]] = np.kron(A_block, B_block)
+    return result
+
+
+def cummean(arr, axis=None):
+    if axis is not None:
+        target_shape = np.ones(np.ndim(arr))
+        target_shape[0] = arr.shape[0]
+        return np.cumsum(arr, axis=axis) / np.arange(1, arr.shape[0] + 1).reshape(target_shape.astype('int'))
+    else:
+        return np.cumsum(arr) / np.arange(1, arr.shape[0] + 1)
+

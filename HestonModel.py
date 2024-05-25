@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from functions import *
 from scipy.linalg import expm
@@ -6,6 +7,7 @@ from tqdm import tqdm, trange
 from functools import partial
 from z3 import Int, Solver, And, Or, Sum, sat
 from itertools import product, compress
+import pickle as pkl
 
 
 def solve_int(A, b, R=None, maxnumsol=20):
@@ -578,7 +580,7 @@ class PolynomialModel:
         if t_max is None:
             t_max = self.observations.shape[0] - 1
 
-        filepath = self.model_name + '/Covariance/U_raw{}_firstobserved{}_seed{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.seed, t_max)
+        filepath = './saves/' + self.model_name + '/Covariance/U_raw{}_firstobserved{}_seed{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.seed, t_max)
         if os.path.exists(filepath):
             return cummean(pkl.load(open(filepath, 'rb')), axis=0)
 
@@ -1090,7 +1092,7 @@ class HestonModel(PolynomialModel):
         Y_disc2 = Y_disc ** 2
 
         observations = np.vstack((v, Y_disc, Y_disc2)).T
-        np.savetxt('HestonModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, seed, t_max), observations)
+        np.savetxt('./saves/HestonModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, seed, t_max), observations)
         self.observations = observations
 
     def generate_more_observations(self, t_max, seed=None, verbose=0):
@@ -1142,7 +1144,7 @@ class HestonModel(PolynomialModel):
 
     @classmethod
     def from_observations(cls, first_observed, kappa, theta_vol, sig, rho, v0_vol, obs, seed=0):
-        filename = 'HestonModel/Observations/observations_{}_{}_{}_{}_seed{}_{}obs.txt'.format(kappa, theta_vol, sig, rho, seed, obs)
+        filename = './saves/HestonModel/Observations/observations_{}_{}_{}_{}_seed{}_{}obs.txt'.format(kappa, theta_vol, sig, rho, seed, obs)
         obj = cls(first_observed=first_observed, kappa=kappa, theta_vol=theta_vol, sig=sig, rho=rho, v0=v0_vol**2)
 
         if os.path.exists(filename):
@@ -1171,10 +1173,16 @@ class FilteredHestonModel(PolynomialModel):
         self.observations = None
         self.seed = None
         self.filter_c = None
+        self.filter_c2 = None
         self.filter_C = None
+        self.filter_C2 = None
         self.filter_Y = None
+        self.filter_Y2 = None
         self.filter_B = None
+        self.filter_B2 = None
         self.lim_expec = None
+        self.lim_expec2 = None
+        self.U = None
         self.dicts = return_dict(self.dim * (np.size(wrt) + 2), order=4)
 
         self.underlying_model = HestonModel(first_observed, kappa, theta_vol, sig, rho, v0)
@@ -1189,7 +1197,9 @@ class FilteredHestonModel(PolynomialModel):
     def calc_filter_params(self):
         a_0 = self.underlying_model.a(self.true_param, order=0)
         a_1 = self.underlying_model.a(self.true_param, order=1, wrt=self.wrt)
+        a_2 = self.underlying_model.a(self.true_param, order=2, wrt=self.wrt)
         self.filter_c = np.append(a_0, a_1.flatten())
+        self.filter_c2 = np.hstack((a_0, a_1.flatten(), a_2.flatten()))
 
         A_0 = self.kalman_filter.K_lim @ self.kalman_filter.H
         A_00 = self.kalman_filter.F_lim
@@ -1198,132 +1208,147 @@ class FilteredHestonModel(PolynomialModel):
         Sig = self.kalman_filter.Sig_tp1_t_lim
         Sig_inv = np.linalg.inv(Sig[self.first_observed:, self.first_observed:])
         S_tilde = Sig_inv @ S[:, self.first_observed:, self.first_observed:] @ Sig_inv
+        K_tilde = Sig[:, self.first_observed:] @ Sig_inv
 
-        A_1 = (self.underlying_model.A(self.true_param, order=1, wrt=self.wrt) @ Sig[:, self.first_observed:] @ Sig_inv + self.underlying_model.A(self.true_param) @ (S[:, :, self.first_observed:] @ Sig_inv - Sig[:, self.first_observed:] @ S_tilde)) @ self.kalman_filter.H
-        A_10 = self.underlying_model.A(self.true_param, order=1, wrt=self.wrt) @ (np.eye(3) - Sig[:, self.first_observed:] @ Sig_inv @ self.kalman_filter.H) - self.underlying_model.A(self.true_param) @ (S[:, :, self.first_observed:] @ Sig_inv - Sig[:, self.first_observed:] @ S_tilde) @ self.kalman_filter.H
+        SS = (S[:, :, self.first_observed:] @ Sig_inv - Sig[:, self.first_observed:] @ S_tilde)
+
+        A_1 = (self.underlying_model.A(self.true_param, order=1, wrt=self.wrt) @ K_tilde + self.underlying_model.A(self.true_param) @ SS) @ self.kalman_filter.H
+        A_10 = self.underlying_model.A(self.true_param, order=1, wrt=self.wrt) @ (np.eye(3) - K_tilde @ self.kalman_filter.H) - self.underlying_model.A(self.true_param) @ SS @ self.kalman_filter.H
         A_11 = self.kalman_filter.F_lim
+
+        A_2 = self.underlying_model.A(self.true_param, order=2, wrt=self.wrt) @ (np.eye(3) - K_tilde @ self.kalman_filter.H) - self.underlying_model.A(self.true_param, order=1, wrt=self.wrt)
+
+
 
         self.filter_C = np.block([[A_0], [np.vstack(A_1)]])
         self.filter_Y = np.block([[A_00, np.zeros((3, 3 * np.size(self.wrt)))], [np.vstack(A_10), np.kron(np.eye(np.size(self.wrt)), A_11)]])
 
     def calc_filter_B(self, order=4):
-        if (self.filter_c is None) | (self.filter_C is None) | (self.filter_Y is None):
-            raise Exception('Method calc_filter_params has to be called first.')
+        filepath = './saves/' + self.model_name + '/B{}.txt'.format(np.atleast_1d(self.wrt).tolist())
+        if os.path.exists(filepath):
+            self.filter_B = np.loadtxt(filepath)
+            self.lim_expec = np.append(1, np.linalg.inv(np.eye(self.filter_B.shape[0] - 1) - self.filter_B[1:, 1:]) @ self.filter_B[1:, 0])
 
-        C = self.filter_C
-        c = self.filter_c
-        Y = self.filter_Y
-
-        k, d = C.shape
-        B = self.underlying_model.B(param=self.true_param, order=order)
-        if np.any(self.filter_c):
-            C = np.vstack((C, np.repeat(0, d)))
-            Y = np.vstack((Y, np.repeat(0, k)))
-            c = np.append(c, 1)[:, None]
-            Y = np.hstack((Y, c))
-            k += 1
-            t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order) + n_dim(d + k - 1, order), desc='Calculating S')
         else:
-            t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order), desc='Calculating S')
+            if (self.filter_c is None) | (self.filter_C is None) | (self.filter_Y is None):
+                raise Exception('Method calc_filter_params has to be called first.')
 
-        dictd = return_dict(d, order)
-        dictk = return_dict(k, order)
+            C = self.filter_C
+            c = self.filter_c
+            Y = self.filter_Y
 
-        B_large = np.zeros((n_dim(d + k, order), n_dim(d + k, order)))
-        dict_large = return_dict(d + k, order)
+            k, d = C.shape
+            B = self.underlying_model.B(param=self.true_param, order=order)
+            if np.any(self.filter_c):
+                C = np.vstack((C, np.repeat(0, d)))
+                Y = np.vstack((Y, np.repeat(0, k)))
+                c = np.append(c, 1)[:, None]
+                Y = np.hstack((Y, c))
+                k += 1
+                t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order) + n_dim(d + k - 1, order), desc='Calculating S')
+            else:
+                t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order), desc='Calculating S')
 
-        def S_func(trans, order):
-            dim1, dim2 = trans.shape
-            dict1, dict2 = return_dict(dim1, order), return_dict(dim2, order)
-            raw_collections1 = np.array([np.sort(dict1[i][dict1[i] != 0]).tolist() for i in range(n_dim(dim1, order))], dtype=object)
-            raw_collections2 = np.array([np.sort(dict2[i][dict2[i] != 0]).tolist() for i in range(n_dim(dim2, order))], dtype=object)
-            locations1 = [np.where(np.in1d(dict1[i], raw_collections1[i]))[0][np.argsort(dict1[i][dict1[i] != 0])] for i in range(n_dim(dim1, order))]
-            locations2 = [np.where(np.in1d(dict2[i], raw_collections2[i]))[0][np.argsort(dict2[i][dict2[i] != 0])] for i in range(n_dim(dim2, order))]
-            collections1 = np.array([x for i, x in enumerate(raw_collections1.tolist()) if x not in raw_collections1.tolist()[:i]], dtype=object)
-            collections2 = np.array([x for i, x in enumerate(raw_collections2.tolist()) if x not in raw_collections2.tolist()[:i]], dtype=object)
-            coll_locator1 = np.array([collections1.tolist().index(x) for x in raw_collections1])
-            coll_locator2 = np.array([collections2.tolist().index(x) for x in raw_collections2])
+            dictd = return_dict(d, order)
+            dictk = return_dict(k, order)
 
-            raw_combinations = np.array(list(product(collections1, collections2)), dtype=object)
-            coll_combinations = np.array(sum([list(product(list(compress(collections1, [np.sum(coll) == i for coll in collections1])), list(compress(collections2, [np.sum(coll) == i for coll in collections2])))) for i in range(1, order + 1)], []), dtype=object)
-            raw_comb_locator = []
-            for comb in raw_combinations:
-                try:
-                    index = np.where(np.all(coll_combinations == comb, axis=1))[0][0]
-                except IndexError:
-                    index = -1
-                raw_comb_locator.append(index)
-            raw_comb_locator = np.array(raw_comb_locator)
-            solutions = []
+            B_large = np.zeros((n_dim(d + k, order), n_dim(d + k, order)))
+            dict_large = return_dict(d + k, order)
 
-            for comb in coll_combinations:
-                dim_mat = len(comb[1]), len(comb[0])
-                A = np.zeros((np.sum(dim_mat), np.prod(dim_mat)))
-                A[np.repeat(np.arange(dim_mat[0]), dim_mat[1]), np.arange(A.shape[1])] = 1
-                A[np.tile(np.arange(dim_mat[1]), dim_mat[0]) + dim_mat[0], np.arange(A.shape[1])] = 1
-                b = np.hstack((comb[1], comb[0]))
-                R = np.eye(A.shape[1])
-                sol = solve_int(A, b, R, maxnumsol=factorial(order))
-                sol = sol.reshape((sol.shape[0], dim_mat[0], dim_mat[1]))
-                solutions.append(np.transpose(sol, axes=(0, 2, 1)))
+            def S_func(trans, order):
+                dim1, dim2 = trans.shape
+                dict1, dict2 = return_dict(dim1, order), return_dict(dim2, order)
+                raw_collections1 = np.array([np.sort(dict1[i][dict1[i] != 0]).tolist() for i in range(n_dim(dim1, order))], dtype=object)
+                raw_collections2 = np.array([np.sort(dict2[i][dict2[i] != 0]).tolist() for i in range(n_dim(dim2, order))], dtype=object)
+                locations1 = [np.where(np.in1d(dict1[i], raw_collections1[i]))[0][np.argsort(dict1[i][dict1[i] != 0])] for i in range(n_dim(dim1, order))]
+                locations2 = [np.where(np.in1d(dict2[i], raw_collections2[i]))[0][np.argsort(dict2[i][dict2[i] != 0])] for i in range(n_dim(dim2, order))]
+                collections1 = np.array([x for i, x in enumerate(raw_collections1.tolist()) if x not in raw_collections1.tolist()[:i]], dtype=object)
+                collections2 = np.array([x for i, x in enumerate(raw_collections2.tolist()) if x not in raw_collections2.tolist()[:i]], dtype=object)
+                coll_locator1 = np.array([collections1.tolist().index(x) for x in raw_collections1])
+                coll_locator2 = np.array([collections2.tolist().index(x) for x in raw_collections2])
 
-            solutions = np.array(solutions, dtype=object)
+                raw_combinations = np.array(list(product(collections1, collections2)), dtype=object)
+                coll_combinations = np.array(sum([list(product(list(compress(collections1, [np.sum(coll) == i for coll in collections1])), list(compress(collections2, [np.sum(coll) == i for coll in collections2])))) for i in range(1, order + 1)], []), dtype=object)
+                raw_comb_locator = []
+                for comb in raw_combinations:
+                    try:
+                        index = np.where(np.all(coll_combinations == comb, axis=1))[0][0]
+                    except IndexError:
+                        index = -1
+                    raw_comb_locator.append(index)
+                raw_comb_locator = np.array(raw_comb_locator)
+                solutions = []
 
-            I, J = np.meshgrid(np.arange(n_dim(dim1, order)), np.arange(n_dim(dim2, order)))
-            S = np.zeros((n_dim(dim1, order), n_dim(dim2, order)))
-            for i in range(n_dim(dim1, order)):
+                for comb in coll_combinations:
+                    dim_mat = len(comb[1]), len(comb[0])
+                    A = np.zeros((np.sum(dim_mat), np.prod(dim_mat)))
+                    A[np.repeat(np.arange(dim_mat[0]), dim_mat[1]), np.arange(A.shape[1])] = 1
+                    A[np.tile(np.arange(dim_mat[1]), dim_mat[0]) + dim_mat[0], np.arange(A.shape[1])] = 1
+                    b = np.hstack((comb[1], comb[0]))
+                    R = np.eye(A.shape[1])
+                    sol = solve_int(A, b, R, maxnumsol=factorial(order))
+                    sol = sol.reshape((sol.shape[0], dim_mat[0], dim_mat[1]))
+                    solutions.append(np.transpose(sol, axes=(0, 2, 1)))
+
+                solutions = np.array(solutions, dtype=object)
+
+                I, J = np.meshgrid(np.arange(n_dim(dim1, order)), np.arange(n_dim(dim2, order)))
+                S = np.zeros((n_dim(dim1, order), n_dim(dim2, order)))
+                for i in range(n_dim(dim1, order)):
+                    t.update(1)
+                    index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections1[coll_locator1[I[:, i]]], collections2[coll_locator2[J[:, i]]]]).T, -2)).all(-1))[-1]
+                    sol_locator = raw_comb_locator[index_in_raw_comb]
+
+                    sol = solutions[sol_locator]
+                    for j in range(n_dim(dim2, order=4)):
+                        if sol_locator[j] == -1:
+                            S[i, j] = 0
+                            continue
+                        large_solution = np.zeros((sol[j].shape[0], dim1, dim2))
+                        large_solution[np.ix_(np.arange(sol[j].shape[0]), locations1[i], locations2[j])] = sol[j]
+                        S[i, j] = np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
+
+                S[0, 0] = 1
+                return S
+
+            S_mat = S_func(Y, order)
+            S_mat_d = S_func(C, order)
+
+            t.set_description('Calculating B')
+            for i in range(dict_large.shape[0]):
                 t.update(1)
-                index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections1[coll_locator1[I[:, i]]], collections2[coll_locator2[J[:, i]]]]).T, -2)).all(-1))[-1]
-                sol_locator = raw_comb_locator[index_in_raw_comb]
-
-                sol = solutions[sol_locator]
-                for j in range(n_dim(dim2, order=4)):
-                    if sol_locator[j] == -1:
-                        S[i, j] = 0
-                        continue
-                    large_solution = np.zeros((sol[j].shape[0], dim1, dim2))
-                    large_solution[np.ix_(np.arange(sol[j].shape[0]), locations1[i], locations2[j])] = sol[j]
-                    S[i, j] = np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
-
-            S[0, 0] = 1
-            return S
-
-        S_mat = S_func(Y, order)
-        S_mat_d = S_func(C, order)
-
-        t.set_description('Calculating B')
-        for i in range(dict_large.shape[0]):
-            t.update(1)
-            large_ind = dict_large[i]
-            lamb, lamb_tilde = np.split(large_ind, [d])
-            lamb_ind = mult_to_ind(lamb, dictd)
-            mu_inds, mu_locs = dict_large[mask(large_ind, dict_large, typ='leq_abs')], np.where(mask(large_ind, dict_large, typ='leq_abs'))[0]
-            for mu_ind, mu_loc in zip(mu_inds, mu_locs):
-                mu, mu_tild = np.split(mu_ind, [d])
-                mu_tild_ind = mult_to_ind(mu_tild, dictk)
-                nus, nus_ind = dictd[mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')], np.where(mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs'))[0]
-                etas, etas_ind = dictk[mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs')], np.where(mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs'))[0]
-                lamb_eta_ind = mult_to_ind(lamb_tilde - etas, dictk)
-                mu_nu_ind = mult_to_ind(mu - nus, dictd)
-                prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
-                B_large[i, mu_loc] = np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
-
-        if np.any(self.filter_c):
-            B_final = np.zeros((n_dim(d + k - 1, order), n_dim(d + k - 1, order)))
-            dict_final = return_dict(d + k - 1, order)
-            t.set_description('Incorporating c')
-            for i in range(n_dim(d + k - 1, order)):
-                t.update(1)
-                lamb_ind = dict_final[i]
-                mu_inds, mu_locs = dict_final[mask(lamb_ind, dict_final, typ='leq_abs')], np.where(mask(lamb_ind, dict_final, typ='leq_abs'))[0]
+                large_ind = dict_large[i]
+                lamb, lamb_tilde = np.split(large_ind, [d])
+                lamb_ind = mult_to_ind(lamb, dictd)
+                mu_inds, mu_locs = dict_large[mask(large_ind, dict_large, typ='leq_abs')], np.where(mask(large_ind, dict_large, typ='leq_abs'))[0]
                 for mu_ind, mu_loc in zip(mu_inds, mu_locs):
-                    B_final[i, mu_loc] = B_large[mult_to_ind(np.append(lamb_ind, 0), dict_large), np.where((dict_large[:, :-1] == np.atleast_2d(mu_ind)[:, None]).all(-1))[1]].sum()
-        else:
-            B_final = B_large
+                    mu, mu_tild = np.split(mu_ind, [d])
+                    mu_tild_ind = mult_to_ind(mu_tild, dictk)
+                    nus, nus_ind = dictd[mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')], np.where(mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs'))[0]
+                    etas, etas_ind = dictk[mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs')], np.where(mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs'))[0]
+                    lamb_eta_ind = mult_to_ind(lamb_tilde - etas, dictk)
+                    mu_nu_ind = mult_to_ind(mu - nus, dictd)
+                    prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
+                    B_large[i, mu_loc] = np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
 
-        self.filter_B = B_final
-        t.set_description('Calculating limiting power expecations')
-        self.lim_expec = np.linalg.inv(np.eye(B_final.shape[0] - 1) - B_final[1:, 1:]) @ B_final[1:, 0]
+            if np.any(self.filter_c):
+                B_final = np.zeros((n_dim(d + k - 1, order), n_dim(d + k - 1, order)))
+                dict_final = return_dict(d + k - 1, order)
+                t.set_description('Incorporating c')
+                for i in range(n_dim(d + k - 1, order)):
+                    t.update(1)
+                    lamb_ind = dict_final[i]
+                    mu_inds, mu_locs = dict_final[mask(lamb_ind, dict_final, typ='leq_abs')], np.where(mask(lamb_ind, dict_final, typ='leq_abs'))[0]
+                    for mu_ind, mu_loc in zip(mu_inds, mu_locs):
+                        B_final[i, mu_loc] = B_large[mult_to_ind(np.append(lamb_ind, 0), dict_large), np.where((dict_large[:, :-1] == np.atleast_2d(mu_ind)[:, None]).all(-1))[1]].sum()
+            else:
+                B_final = B_large
+
+            self.filter_B = B_final
+            t.set_description('Calculating limiting power expecations')
+            self.lim_expec = np.append(1, np.linalg.inv(np.eye(B_final.shape[0] - 1) - B_final[1:, 1:]) @ B_final[1:, 0])
+
+            np.savetxt(filepath, self.filter_B)
 
     def calculate_U(self):
         k = np.size(self.wrt)
@@ -1347,11 +1372,44 @@ class FilteredHestonModel(PolynomialModel):
 
         A_kron2 = self.filter_B[1:n_dim(self.dim * (k + 2), 2), 1:n_dim(self.dim * (k + 2), 2)]
         alpha_g = np.einsum('ij, kj -> ki', np.linalg.inv(A_kron2 - np.eye(n_dim(self.dim * (k + 2), 2) - 1)).T, alpha_f)
+        alpha_g = np.pad(alpha_g, ((0, 0), (1, n_dim(self.dim * (k + 2), 4) - n_dim(self.dim * (k + 2), 2))), mode='constant')
+        alpha_h = np.einsum('ij, jk -> ik', alpha_g, self.filter_B)
+
+        coefs_gg = np.zeros((k, k, n_dim(self.dim * (k + 2), 4)))
+        coefs_hh = np.zeros((k, k, n_dim(self.dim * (k + 2), 4)))
+
+        for i in range(k):
+            for j in range(i, k):
+                for l in range(n_dim(self.dim * (k + 2), 4)):
+                    lamb = self.dicts[l]
+                    mus = self.dicts[mask(2, self.dicts, 'leq_abs') & mask(lamb, self.dicts, 'leq')]
+                    coefs_g = np.sum(alpha_g[i, mult_to_ind(mus, self.dicts)] * alpha_g[j, mult_to_ind(lamb - mus, self.dicts)])
+                    coefs_h = np.sum(alpha_h[i, mult_to_ind(mus, self.dicts)] * alpha_h[j, mult_to_ind(lamb - mus, self.dicts)])
+                    coefs_gg[i, j, l] = coefs_g
+                    coefs_gg[j, i, l] = coefs_g
+                    coefs_hh[i, j, l] = coefs_h
+                    coefs_hh[j, i, l] = coefs_h
+
+        coefs_U = coefs_gg - coefs_hh
+        U = coefs_U @ self.lim_expec
+        self.U = U
+
+        return U
 
 
 hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=2)
 hestonf.calc_filter_params()
 hestonf.calc_filter_B(order=4)
+hestonf.calculate_U()
+
+model = HestonModel.from_observations(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0_vol=0.4, obs=200000, seed=20)
+U = model.compute_U(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
+
+model = HestonModel.from_observations(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0_vol=0.4, obs=200000, seed=21)
+U = model.compute_U(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
+
+hestonf.underlying_model.generate_observations(t_max=200000, seed=20, verbose=1)
+U = hestonf.underlying_model.compute_U(hestonf.true_param, wrt=2, verbose=1)
 
 
 ## Monte Carlo Checkup
