@@ -8,6 +8,7 @@ from functools import partial
 from z3 import Int, Solver, And, Or, Sum, sat
 from itertools import product, compress
 import pickle as pkl
+import matplotlib.pyplot as plt
 
 
 def solve_int(A, b, R=None, maxnumsol=20):
@@ -718,6 +719,58 @@ class PolynomialModel:
             tr.close()
 
         out = -0.5 * (mu + 2 * np.einsum('ijk, ik -> ij', nu, eps) + np.einsum('ij, ljk, ik -> il', eps, psi, eps) + 2 * np.einsum('ilj, jk, ilk -> il', deriv_filter_tp1_t_i[1:, :, self.first_observed:], Sig_inv, deriv_filter_tp1_t_j[1:, :, self.first_observed:]))
+
+        ### Check against new calculations
+        # k = np.size(wrt)
+        #
+        # S = kfilter.S_star(wrt=wrt)
+        # S_o_i = S[np.triu_indices(np.size(wrt))[0], self.first_observed:, self.first_observed:]
+        # S_o_j = S[np.triu_indices(np.size(wrt))[1], self.first_observed:, self.first_observed:]
+        # Sig_inv = np.linalg.inv(kfilter.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
+        # S_tilde_i = np.einsum('jk, ikl, lm -> ijm', Sig_inv, S_o_i, Sig_inv)
+        # S_tilde_j = np.einsum('jk, ikl, lm -> ijm', Sig_inv, S_o_j, Sig_inv)
+        # S_hat_o = np.einsum('ijk, ikl -> ijl', S_o_j, S_tilde_i) + np.einsum('ijk, ikl -> ijl', S_o_i, S_tilde_j)
+        # R_o = kfilter.R_star(wrt=wrt)[:, self.first_observed:, self.first_observed:]
+        # R_tilde_o = np.einsum('jk, ikl, lm -> ijm', Sig_inv, R_o, Sig_inv)
+        # psi2 = kfilter.H.T @ (np.einsum('jk, ikl -> ijl', Sig_inv, S_hat_o) - R_tilde_o) @ kfilter.H
+        # mu2 = -1 / 2 * np.trace(np.einsum('jk, ikl -> ijl', Sig_inv, R_o) - np.einsum('ijk, ikl -> ijl', S_tilde_i, S_o_j), axis1=1, axis2=2).reshape(1, -1)
+        #
+        # S_tilde_i = kfilter.H.T @ S_tilde_i @ kfilter.H
+        # S_tilde_j = kfilter.H.T @ S_tilde_j @ kfilter.H
+        # Sig_inv = kfilter.H.T @ Sig_inv @ kfilter.H
+        #
+        # Gamma_ij = np.zeros((int(k * (k + 1) / 2), self.dim * (int(k * (k + 1) / 2) + k + 2), self.dim * (int(k * (k + 1) / 2) + k + 2)))
+        #
+        # for l in range(int(k * (k + 1) / 2)):
+        #     i, j = np.triu_indices(k)[0][l], np.triu_indices(k)[1][l]
+        #     Gamma_ij[l, :2 * self.dim, :2 * self.dim] = np.block([[psi2[l], -psi2[l]], [-psi2[l], psi2[l]]])
+        #
+        #     Gamma_ij[l, :2 * self.dim, (2 + i) * self.dim:(3 + i) * self.dim] += np.block([[S_tilde_j[l]], [-S_tilde_j[l]]])
+        #     Gamma_ij[l, (2 + i) * self.dim:(3 + i) * self.dim, :2 * self.dim] += np.block([S_tilde_j[l], -S_tilde_j[l]])
+        #
+        #     Gamma_ij[l, :2 * self.dim, (2 + j) * self.dim:(3 + j) * self.dim] += np.block([[S_tilde_i[l]], [-S_tilde_i[l]]])
+        #     Gamma_ij[l, (2 + j) * self.dim:(3 + j) * self.dim, :2 * self.dim] += np.block([S_tilde_i[l], -S_tilde_i[l]])
+        #
+        #     Gamma_ij[l, (2 + i) * self.dim:(3 + i) * self.dim, (2 + j) * self.dim:(3 + j) * self.dim] += Sig_inv
+        #     Gamma_ij[l, (2 + j) * self.dim:(3 + j) * self.dim, (2 + i) * self.dim:(3 + i) * self.dim] += Sig_inv
+        #
+        #     Gamma_ij[l, :2 * self.dim, (k + 2 + l) * self.dim:(k + 3 + l) * self.dim] = np.block([[-Sig_inv], [Sig_inv]])
+        #     Gamma_ij[l, (k + 2 + l) * self.dim:(k + 3 + l) * self.dim, :2 * self.dim] = np.block([-Sig_inv, Sig_inv])
+        # Gamma_ij *= -1 / 2
+        #
+        # Gamma_ij_coefs = np.triu(Gamma_ij) + np.triu(Gamma_ij, 1)
+        # coefs = np.vstack([Gamma_ij_coefs[j][np.triu_indices_from(Gamma_ij[0])] for j in range(int(k * (k + 1) / 2))])
+        # coefs = np.hstack((mu2.T, np.zeros((int(k * (k + 1) / 2), self.dim * (int(k * (k + 1) / 2) + k + 2))), coefs))
+        #
+        # large_process = np.hstack((self.observations, kfilter.X_hat_tp1_t_list_hom, deriv_filter_tp1_t[:, 0, :], deriv2_filter[:, 0, :]))[1:]
+        # dicts2 = return_dict(self.dim * (int(np.size(wrt) * (np.size(wrt) + 1) / 2) + np.size(wrt) + 2), order=2)
+        #
+        # powers = []
+        # for i in trange(large_process.shape[0]):
+        #     powers.append(mult_pow(large_process[i], dicts2))
+        # powers = np.array(powers)
+        # out2 = powers @ coefs.T
+
         result = np.zeros((t_max, np.size(wrt), np.size(wrt)))
         result[:, np.triu_indices(np.size(wrt))[0], np.triu_indices(np.size(wrt))[1]] = out
         result[:, np.triu_indices(np.size(wrt))[1], np.triu_indices(np.size(wrt))[0]] = out
@@ -1585,8 +1638,8 @@ class FilteredHestonModel(PolynomialModel):
             Gamma_ij[l, :2 * self.dim, (2 + j) * self.dim:(3 + j) * self.dim] += np.block([[S_tilde_i[l]], [-S_tilde_i[l]]])
             Gamma_ij[l, (2 + j) * self.dim:(3 + j) * self.dim, :2 * self.dim] += np.block([S_tilde_i[l], -S_tilde_i[l]])
 
-            Gamma_ij[l, (2 + i) * self.dim:(3 + i) * self.dim, (2 + j) * self.dim:(3 + j) * self.dim] = Sig_inv
-            Gamma_ij[l, (2 + j) * self.dim:(3 + j) * self.dim, (2 + i) * self.dim:(3 + i) * self.dim] = Sig_inv
+            Gamma_ij[l, (2 + i) * self.dim:(3 + i) * self.dim, (2 + j) * self.dim:(3 + j) * self.dim] += Sig_inv
+            Gamma_ij[l, (2 + j) * self.dim:(3 + j) * self.dim, (2 + i) * self.dim:(3 + i) * self.dim] += Sig_inv
 
             Gamma_ij[l, :2 * self.dim, (k + 2 + l) * self.dim:(k + 3 + l) * self.dim] = np.block([[-Sig_inv], [Sig_inv]])
             Gamma_ij[l, (k + 2 + l) * self.dim:(k + 3 + l) * self.dim, :2 * self.dim] = np.block([-Sig_inv, Sig_inv])
@@ -1603,7 +1656,7 @@ class FilteredHestonModel(PolynomialModel):
         return W
 
 
-hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=3)
+hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=2)
 hestonf.calc_filter_params()
 hestonf.calc_filter_B(order=4)
 hestonf.calc_filter_B2(order=2)
@@ -1616,8 +1669,8 @@ U = model.compute_U(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
 W = model.compute_W(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
 
 model = HestonModel.from_observations(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0_vol=0.4, obs=200000, seed=21)
-U = model.compute_U(hestonf.true_param, wrt=3, verbose=1, save_raw=True)
-W = model.compute_W(hestonf.true_param, wrt=3, verbose=1, save_raw=True)
+U = model.compute_U(model.true_param, wrt=3, verbose=1, save_raw=True)
+W = model.compute_W(model.true_param, wrt=3, verbose=1, save_raw=True)
 
 model = HestonModel.from_observations(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0_vol=0.4, obs=200000, seed=22)
 U = model.compute_U(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
