@@ -721,6 +721,58 @@ class PolynomialModel:
             tr.close()
 
         out = -0.5 * (mu + 2 * np.einsum('ijk, ik -> ij', nu, eps) + np.einsum('ij, ljk, ik -> il', eps, psi, eps) + 2 * np.einsum('ilj, jk, ilk -> il', deriv_filter_tp1_t_i[1:, :, self.first_observed:], Sig_inv, deriv_filter_tp1_t_j[1:, :, self.first_observed:]))
+
+        ### Check against new calculations
+        # k = np.size(wrt)
+        #
+        # S = kfilter.S_star(wrt=wrt)
+        # S_o_i = S[np.triu_indices(np.size(wrt))[0], self.first_observed:, self.first_observed:]
+        # S_o_j = S[np.triu_indices(np.size(wrt))[1], self.first_observed:, self.first_observed:]
+        # Sig_inv = np.linalg.inv(kfilter.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
+        # S_tilde_i = np.einsum('jk, ikl, lm -> ijm', Sig_inv, S_o_i, Sig_inv)
+        # S_tilde_j = np.einsum('jk, ikl, lm -> ijm', Sig_inv, S_o_j, Sig_inv)
+        # S_hat_o = np.einsum('ijk, ikl -> ijl', S_o_j, S_tilde_i) + np.einsum('ijk, ikl -> ijl', S_o_i, S_tilde_j)
+        # R_o = kfilter.R_star(wrt=wrt)[:, self.first_observed:, self.first_observed:]
+        # R_tilde_o = np.einsum('jk, ikl, lm -> ijm', Sig_inv, R_o, Sig_inv)
+        # psi2 = kfilter.H.T @ (np.einsum('jk, ikl -> ijl', Sig_inv, S_hat_o) - R_tilde_o) @ kfilter.H
+        # mu2 = -1 / 2 * np.trace(np.einsum('jk, ikl -> ijl', Sig_inv, R_o) - np.einsum('ijk, ikl -> ijl', S_tilde_i, S_o_j), axis1=1, axis2=2).reshape(1, -1)
+        #
+        # S_tilde_i = kfilter.H.T @ S_tilde_i @ kfilter.H
+        # S_tilde_j = kfilter.H.T @ S_tilde_j @ kfilter.H
+        # Sig_inv = kfilter.H.T @ Sig_inv @ kfilter.H
+        #
+        # Gamma_ij = np.zeros((int(k * (k + 1) / 2), self.dim * (int(k * (k + 1) / 2) + k + 2), self.dim * (int(k * (k + 1) / 2) + k + 2)))
+        #
+        # for l in range(int(k * (k + 1) / 2)):
+        #     i, j = np.triu_indices(k)[0][l], np.triu_indices(k)[1][l]
+        #     Gamma_ij[l, :2 * self.dim, :2 * self.dim] = np.block([[psi2[l], -psi2[l]], [-psi2[l], psi2[l]]])
+        #
+        #     Gamma_ij[l, :2 * self.dim, (2 + i) * self.dim:(3 + i) * self.dim] += np.block([[S_tilde_j[l]], [-S_tilde_j[l]]])
+        #     Gamma_ij[l, (2 + i) * self.dim:(3 + i) * self.dim, :2 * self.dim] += np.block([S_tilde_j[l], -S_tilde_j[l]])
+        #
+        #     Gamma_ij[l, :2 * self.dim, (2 + j) * self.dim:(3 + j) * self.dim] += np.block([[S_tilde_i[l]], [-S_tilde_i[l]]])
+        #     Gamma_ij[l, (2 + j) * self.dim:(3 + j) * self.dim, :2 * self.dim] += np.block([S_tilde_i[l], -S_tilde_i[l]])
+        #
+        #     Gamma_ij[l, (2 + i) * self.dim:(3 + i) * self.dim, (2 + j) * self.dim:(3 + j) * self.dim] += Sig_inv
+        #     Gamma_ij[l, (2 + j) * self.dim:(3 + j) * self.dim, (2 + i) * self.dim:(3 + i) * self.dim] += Sig_inv
+        #
+        #     Gamma_ij[l, :2 * self.dim, (k + 2 + l) * self.dim:(k + 3 + l) * self.dim] = np.block([[-Sig_inv], [Sig_inv]])
+        #     Gamma_ij[l, (k + 2 + l) * self.dim:(k + 3 + l) * self.dim, :2 * self.dim] = np.block([-Sig_inv, Sig_inv])
+        # Gamma_ij *= -1 / 2
+        #
+        # Gamma_ij_coefs = np.triu(Gamma_ij) + np.triu(Gamma_ij, 1)
+        # coefs = np.vstack([Gamma_ij_coefs[j][np.triu_indices_from(Gamma_ij[0])] for j in range(int(k * (k + 1) / 2))])
+        # coefs = np.hstack((mu2.T, np.zeros((int(k * (k + 1) / 2), self.dim * (int(k * (k + 1) / 2) + k + 2))), coefs))
+        #
+        # large_process = np.hstack((self.observations, kfilter.X_hat_tp1_t_list_hom, deriv_filter_tp1_t[:, 0, :], deriv2_filter[:, 0, :]))[1:]
+        # dicts2 = return_dict(self.dim * (int(np.size(wrt) * (np.size(wrt) + 1) / 2) + np.size(wrt) + 2), order=2)
+        #
+        # powers = []
+        # for i in trange(large_process.shape[0]):
+        #     powers.append(mult_pow(large_process[i], dicts2))
+        # powers = np.array(powers)
+        # out2 = powers @ coefs.T
+
         result = np.zeros((t_max, np.size(wrt), np.size(wrt)))
         result[:, np.triu_indices(np.size(wrt))[0], np.triu_indices(np.size(wrt))[1]] = out
         result[:, np.triu_indices(np.size(wrt))[1], np.triu_indices(np.size(wrt))[0]] = out
@@ -1351,7 +1403,7 @@ class OUNIGModel(PolynomialModel):
                 observations.append(X)
 
         observations = np.stack(observations)
-        np.savetxt('OUNIGModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, seed, t_max), observations)
+        np.savetxt('./saves/OUNIGModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, seed, t_max), observations)
         self.observations = observations
 
     def generate_more_observations(self, t_max, seed=None, verbose=0):
@@ -1379,12 +1431,12 @@ class OUNIGModel(PolynomialModel):
 
         self.seed = str(self.seed) + '+' + str(seed)
         t_max = observations.shape[0] - 1
-        np.savetxt('OUNIGModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, t_max), observations)
+        np.savetxt('./saves/OUNIGModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, t_max), observations)
         self.observations = observations
 
     @classmethod
     def from_observations(cls, first_observed, lamb, kappa, alpha, delta, x, obs, seed=0):
-        filename = 'OUNIGModel/Observations/observations_{}_{}_{}_{}_seed{}_{}obs.txt'.format(lamb, kappa, alpha, delta, seed, obs)
+        filename = './saves/OUNIGModel/Observations/observations_{}_{}_{}_{}_seed{}_{}obs.txt'.format(lamb, kappa, alpha, delta, seed, obs)
         obj = cls(first_observed=first_observed, lamb=lamb, kappa=kappa, alpha=alpha, delta=delta, x=x)
 
         if os.path.exists(filename):
@@ -2327,9 +2379,13 @@ class FilteredOUNIGModel(PolynomialModel):
         return V, Std, Corr
 
 
+model = OUNIGModel.from_observations(first_observed=1, lamb=1, kappa=0.5, alpha=2, delta=3, x=[0.5, 1], obs=200000, seed=21)
+# U = model.compute_U(model.true_param, wrt=0, verbose=1, save_raw=True)
+W = model.compute_W(model.true_param, wrt=0, verbose=1, save_raw=True)
+
 ## Formula checkup for a, A, C
 hest = HestonModel(first_observed=1, kappa=1.3, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.2 ** 2)
-hest = OUNIGModel(first_observed=1, lamb=1.315, kappa=0.7, alpha=1.3, delta=3.2, x=[0.5, 1])
+hest = OUNIGModel(first_observed=1, lamb=1, kappa=0.5, alpha=2, delta=3, x=[0.5, 1])
 B = hest.B(hest.full_param, order=2)
 lim_expec = np.append(1, np.linalg.inv(np.eye(B.shape[0] - 1) - B[1:, 1:]) @ B[1:, 0])
 
@@ -2344,12 +2400,23 @@ C_checkup = Sig_inf - a @ a.T - a @ lim_inf.T @ A.T - A @ lim_inf @ a.T - A @ Si
 C = hest.C_lim(hest.true_param)
 
 
-
+# Check derivatives
+hest_dist = OUNIGModel(first_observed=1, lamb=1 + 1e-5, kappa=0.5, alpha=2, delta=3, x=[0.5, 1])
+hest_dist_m = OUNIGModel(first_observed=1, lamb=1 - 1e-5, kappa=0.5, alpha=2, delta=3, x=[0.5, 1])
+C_dist = hest_dist.C_lim(hest_dist.true_param)
+C_dist_m = hest_dist_m.C_lim(hest_dist_m.true_param)
+C_deriv2 = (C_dist - 2 * C + C_dist_m) / 1e-10
+C_deriv = (C_dist - C) / 1e-5
+C_deriv_checkup = hest.C_lim(hest.true_param, order=1, wrt=0)
+C_deriv2_checkup = hest.C_lim(hest.true_param, order=2, wrt=0)
 
 ouf = FilteredOUNIGModel(first_observed=1, lamb=1, kappa=0.5, alpha=2, delta=3, x=[0.5, 1], wrt=0)
 ouf.calc_filter_params()
 ouf.calc_filter_B(order=4)
 ouf.calc_filter_B2(order=2)
+U_mod = ouf.calculate_U()
+W_mod = ouf.calculate_W()
+np.sqrt(U_mod / W_mod**2)[0, 0]
 V, Std, Corr = ouf.calculate_V()
 
 hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=2)
@@ -2436,3 +2503,126 @@ X_hat_tp1_t = np.stack(X_hat_tp1_t_list_hom, axis=0)
 X_hat_tp1_t_final = X_hat_tp1_t[-1]
 obs_final = np.stack((v_final, Y_final, Y_final2), axis=0).T[-1]
 aug_final = np.hstack((obs_final, X_hat_tp1_t_final))
+
+
+## Monte Carlo Checkup OU
+
+def simulate_ou(samples, T, dt, x, lamb, kappa, alpha, delta, seed=0, antithetic=False):
+    dt = 1 / 250
+    steps = int(np.ceil(T / dt)) + 1
+
+    W = np.random.standard_normal(size=(samples, steps - 1, 2))
+    dIG = invgauss_bn(xi=delta * dt, eta=alpha, size=(samples, steps - 1), seed=seed)
+    dNIG = np.sqrt(dIG)[..., None] * W
+
+    expQ = np.array([[np.exp(-lamb * dt), 0], [kappa * (np.exp(-kappa * dt) - np.exp(-lamb * dt)) / (lamb - kappa), np.exp(-kappa * dt)]])
+    observations = np.empty(shape=(samples, T + 1, 2))
+    observations[:, 0] = x
+    X = observations[:, 0]
+    observations = [X]
+    tr = trange(1, steps, desc='Generating Observations')
+    for timestep in tr:
+        X = (expQ @ (X + dNIG[:, timestep - 1]).T).T
+        if timestep % int(1 / dt) == 0:
+            observations.append(X)
+
+    observations = np.stack(observations)
+    return observations
+
+
+t0 = 0
+t = 100
+dt = 1 / 100
+x = [0.5, 1]
+lamb = 1
+kappa = 0.5
+alpha = 2
+delta = 3
+
+samples = 10000
+
+obs = simulate_ou(samples, t - t0, dt, x, lamb, kappa, alpha, delta, seed=1)
+filter = ouf.kalman_filter
+
+observations = obs.copy()
+t_max = observations.shape[0]
+observations = observations[..., filter.first_observed:]
+X_hat_tp1_t_list_hom = [np.tile(x, (10000, 1)), np.tile(filter.a() + filter.A() @ x, (10000, 1))]
+X_hat_tt_list_hom = [np.tile(x, (10000, 1))]
+X_hat_tp1_t = X_hat_tp1_t_list_hom[-1]
+Sig_inv = np.linalg.inv(filter.Sig_tp1_t_lim[filter.first_observed:, filter.first_observed:])
+Sig_tp1_t_lim_o = filter.Sig_tp1_t_lim[:, filter.first_observed:]
+tr = tqdm(total=t_max - 1)
+tr.update(1)
+for t in range(1, t_max - 1):
+    X_hat_tt = X_hat_tp1_t + (Sig_tp1_t_lim_o @ Sig_inv @ (observations[t] - X_hat_tp1_t[:, filter.first_observed:]).T).T
+    X_hat_tp1_t = filter.a() + (filter.A() @ X_hat_tt.T).T
+    X_hat_tp1_t_list_hom.append(X_hat_tp1_t)
+    X_hat_tt_list_hom.append(X_hat_tt)
+    tr.update(1)
+tr.close()
+
+X_hat_tt = np.stack(X_hat_tt_list_hom, axis=0)
+X_hat_tp1_t = np.stack(X_hat_tp1_t_list_hom, axis=0)
+
+wrt = 0
+s_star = filter.S_star(wrt=wrt)
+partial_a = filter.a(wrt=wrt, order=1)
+partial_A = filter.A(wrt=wrt, order=1)
+s_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star[:, filter.first_observed:, filter.first_observed:], Sig_inv)
+k_tilde = filter.Sig_tp1_t_lim[:, filter.first_observed:] @ Sig_inv
+V_tp1_t_list = [np.zeros((10000, np.size(wrt), filter.dim)), np.tile(partial_a + partial_A @ x, (10000, 1, 1))]
+V_tt_list = [np.zeros((10000, np.size(wrt), filter.dim))]
+V_tp1_t = V_tp1_t_list[-1]
+tr = tqdm(total=t_max - 1)
+tr.update(1)
+for t in range(1, t_max - 1):
+    V_tt = V_tp1_t + np.einsum('ijk, mk -> mij', s_star[:, :, filter.first_observed:] @ Sig_inv - np.einsum('jk, ikl -> ijl', filter.Sig_tp1_t_lim[:, filter.first_observed:], s_tilde), observations[t] - X_hat_tp1_t[t, :, filter.first_observed:]) - np.einsum('jk, mik -> mij', k_tilde, V_tp1_t[:, :, filter.first_observed:])
+    V_tp1_t = partial_a + np.einsum('ijk, mk -> mij', partial_A, X_hat_tt[t]) + np.einsum('jk, mik -> mij', filter.A(), V_tt)
+    V_tp1_t_list.append(V_tp1_t)
+    V_tt_list.append(V_tt)
+    tr.update(1)
+tr.close()
+
+V_tp1_t = np.stack(V_tp1_t_list, axis=0).squeeze()
+V_tt = np.stack(V_tt_list, axis=0).squeeze()
+
+s_star_i = s_star[np.triu_indices(np.size(wrt))[0]]
+s_star_j = s_star[np.triu_indices(np.size(wrt))[1]]
+s_star_i_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star_i[:, filter.first_observed:, filter.first_observed:], Sig_inv)
+s_star_j_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star_j[:, filter.first_observed:, filter.first_observed:], Sig_inv)
+s_hat = np.einsum('ijk, ikl -> ijl', s_star_j[:, :, filter.first_observed:], s_star_i_tilde) + np.einsum('ijk, ikl -> ijl', s_star_i[:, :, filter.first_observed:], s_star_j_tilde)
+s_hat_o = np.einsum('ijk, ikl -> ijl', s_star_j[:, filter.first_observed:, filter.first_observed:], s_star_i_tilde) + np.einsum('ijk, ikl -> ijl', s_star_i[:, filter.first_observed:, filter.first_observed:], s_star_j_tilde)
+
+r_star = filter.R_star(wrt=wrt)
+partial_a = filter.a(wrt=wrt, order=2)
+partial_A = filter.A(wrt=wrt, order=2)
+partial_A_i = filter.A(wrt=wrt, order=1)[np.triu_indices(np.size(wrt))[0]]
+partial_A_j = filter.A(wrt=wrt, order=1)[np.triu_indices(np.size(wrt))[1]]
+
+M = r_star[:, :, filter.first_observed:] @ Sig_inv - s_hat + np.einsum('jk, ikl -> ijl', k_tilde, s_hat_o) - np.einsum('jk, ikl, lm -> ijm', k_tilde, r_star[:, filter.first_observed:, filter.first_observed:], Sig_inv)
+N_i = np.einsum('jk, ikl -> ijl', filter.Sig_tp1_t_lim[:, filter.first_observed:], s_star_i_tilde) - s_star_i[:, :, filter.first_observed:] @ Sig_inv
+N_j = np.einsum('jk, ikl -> ijl', filter.Sig_tp1_t_lim[:, filter.first_observed:], s_star_j_tilde) - s_star_j[:, :, filter.first_observed:] @ Sig_inv
+
+W_tp1_t_list = [np.zeros((10000, np.size(wrt), filter.dim)), np.tile(partial_a + partial_A @ x, (10000, 1, 1))]
+W_tt_list = [np.zeros((10000, np.size(wrt), filter.dim))]
+W_tp1_t = W_tp1_t_list[-1]
+tr = tqdm(total=t_max - 1)
+tr.update(1)
+for t in range(1, t_max - 1):
+    eps = observations[t] - X_hat_tp1_t[t, :, filter.first_observed:]
+    W_tt = W_tp1_t + np.einsum('ijk, mk -> mij', M, eps) + np.einsum('ijk, mk -> mij', N_j, V_tp1_t[t, :, filter.first_observed:]) + np.einsum('ijk, mk -> mij', N_i, V_tp1_t[t, :, filter.first_observed:]) - np.einsum('jk, mik -> mij', k_tilde, W_tp1_t[:, :, filter.first_observed:])
+    W_tp1_t = partial_a + np.einsum('ijk, mk -> mij', partial_A, X_hat_tt[t]) + np.einsum('ijk, mk -> mij', partial_A_j, V_tt[t]) + np.einsum('ijk, mk -> mij', partial_A_i, V_tt[t]) + np.einsum('jk, mik -> mij', filter.A(), W_tt)
+    W_tp1_t_list.append(W_tp1_t)
+    W_tt_list.append(W_tt)
+    tr.update(1)
+tr.close()
+
+W_tp1_t = np.stack(W_tp1_t_list, axis=0).squeeze()
+W_tt = np.stack(W_tt_list, axis=0).squeeze()
+
+X_hat_tp1_t_final = X_hat_tp1_t[-1]
+V_tp1_t_final = V_tp1_t[-1]
+W_tp1_t_final = W_tp1_t[-1]
+obs_final = obs[-1]
+aug_final = np.hstack((obs_final, X_hat_tp1_t_final, V_tp1_t_final, W_tp1_t_final))

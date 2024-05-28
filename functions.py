@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.special import binom
+from scipy.stats import invgauss
 from itertools import combinations_with_replacement
 
 
@@ -91,4 +92,10 @@ def sym(arr):
     else:
         assert arr.shape[1] == arr.shape[2]
         return arr + np.transpose(arr, (0, 2, 1))
+
+
+def invgauss_bn(xi, eta, size, seed=None):
+    mu = xi / eta
+    lamb = xi**2
+    return invgauss.rvs(mu=mu / lamb, loc=0, scale=lamb, size=size, random_state=seed)
 
