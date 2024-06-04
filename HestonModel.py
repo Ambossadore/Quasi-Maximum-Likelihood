@@ -205,12 +205,14 @@ def solve_int(A, b, R=None, maxnumsol=24):
 ## Setting up the filter matrix
 
 class KalmanFilter:
-    def __init__(self, dim, a, A, C, C_lim=None, first_observed=0):
+    def __init__(self, dim, a, A, C, E_0, Cov_0, C_lim=None, first_observed=0):
         self.dim = dim
         self.a = a
         self.A = A
         self.C = C
         self.C_lim = C_lim
+        self.E_0 = E_0
+        self.Cov_0 = Cov_0
         self.first_observed = first_observed
         self.Sig_tp1_t_list = None
         self.Sig_tt_list = None
@@ -225,8 +227,10 @@ class KalmanFilter:
         self.X_hat_tt_list_hom = None
 
     def build_covariance(self, t_max=100000):
-        Sig_tp1_t_list = [np.zeros([self.dim, self.dim]), self.C(t=1)]
-        Sig_tt_list = [np.zeros([self.dim, self.dim])]
+        Cov_0 = self.Cov_0()
+        Sig_tp1_t_list = [Cov_0]
+        Sig_tt_list = [Cov_0 - Cov_0[:, self.first_observed:] @ np.linalg.pinv(Cov_0[self.first_observed:, self.first_observed:]) @ Cov_0[:, self.first_observed:].T]
+        Sig_tp1_t_list.append(self.A() @ Sig_tt_list[0] @ self.A().T + self.C(t=1))
         Sig_tp1_t = Sig_tp1_t_list[-1]
         for t in range(1, t_max):
             Sig_tt = Sig_tp1_t - Sig_tp1_t[:, self.first_observed:] @ np.linalg.inv(Sig_tp1_t[self.first_observed:, self.first_observed:]) @ Sig_tp1_t[:, self.first_observed:].T
@@ -272,14 +276,15 @@ class KalmanFilter:
         R_star_vectorized = (np.linalg.inv(np.eye(self.dim ** 2) - np.kron(self.F_lim, self.F_lim)) @ right_side.reshape(BB_lim_partial2.shape[0], self.dim**2, order='F').T).T
         return R_star_vectorized.reshape(BB_lim_partial2.shape[0], self.dim, self.dim, order='F')
 
-    def build_kalman_filter(self, x, observations, t_max=None, verbose=0, close_pb=True):
+    def build_kalman_filter(self, observations, t_max=None, verbose=0, close_pb=True):
         if t_max is None:
             t_max = observations.shape[0]
         if self.Sig_tp1_t_list is None:
             raise Exception('Method build_covariance needs to be called before method kalman_filter.')
         observations = observations[:, self.first_observed:]
-        X_hat_tp1_t_list = [x, self.a() + self.A() @ x]
-        X_hat_tt_list = [x]
+        X_hat_tp1_t_list = [self.E_0()]
+        X_hat_tt_list = [self.E_0() + self.Cov_0()[:, self.first_observed:] @ np.linalg.pinv(self.Cov_0()[self.first_observed:, self.first_observed:]) @ (observations[0] - self.E_0()[self.first_observed:])]
+        X_hat_tp1_t_list.append(self.a() + self.A() @ X_hat_tt_list[0])
         X_hat_tp1_t = X_hat_tp1_t_list[-1]
         t_conv = self.Sig_tp1_t_list.shape[0]
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_list[1:, self.first_observed:, self.first_observed:])
@@ -311,14 +316,15 @@ class KalmanFilter:
         self.X_hat_tp1_t_list = np.stack(X_hat_tp1_t_list)
         self.X_hat_tt_list = np.stack(X_hat_tt_list)
 
-    def build_kalman_filter_hom(self, x, observations, t_max=None, verbose=0, close_pb=True):
+    def build_kalman_filter_hom(self, observations, t_max=None, verbose=0, close_pb=True):
         if t_max is None:
             t_max = observations.shape[0]
         if self.Sig_tp1_t_lim is None:
             raise Exception('Method build_covariance needs to be called before method kalman_filter.')
         observations = observations[:, self.first_observed:]
-        X_hat_tp1_t_list_hom = [x, self.a() + self.A() @ x]
-        X_hat_tt_list_hom = [x]
+        X_hat_tp1_t_list_hom = [self.E_0()]
+        X_hat_tt_list_hom = [self.E_0() + self.Sig_tp1_t_lim[:, self.first_observed:] @ np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:]) @ (observations[0] - self.E_0()[self.first_observed:])]
+        X_hat_tp1_t_list.append(self.a() + self.A() @ X_hat_tt_list_hom[0])
         X_hat_tp1_t = X_hat_tp1_t_list_hom[-1]
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
         Sig_tp1_t_lim_o = self.Sig_tp1_t_lim[:, self.first_observed:]
@@ -342,7 +348,7 @@ class KalmanFilter:
         self.X_hat_tp1_t_list_hom = np.stack(X_hat_tp1_t_list_hom)
         self.X_hat_tt_list_hom = np.stack(X_hat_tt_list_hom)
 
-    def deriv_filter_hom(self, x, observations, wrt, t_max=None, verbose=0, close_pb=True):
+    def deriv_filter_hom(self, observations, wrt, t_max=None, verbose=0, close_pb=True):
         if t_max is None:
             t_max = observations.shape[0]
         s_star = self.S_star(wrt=wrt)
@@ -352,8 +358,9 @@ class KalmanFilter:
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
         s_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star[:, self.first_observed:, self.first_observed:], Sig_inv)
         k_tilde = self.Sig_tp1_t_lim[:, self.first_observed:] @ Sig_inv
-        V_tp1_t_list = [np.zeros((np.size(wrt), self.dim)), partial_a + partial_A @ x]
-        V_tt_list = [np.zeros((np.size(wrt), self.dim))]
+        V_tp1_t_list = [self.E_0(order=1, wrt=wrt)]
+        V_tt_list = [self.E_0(order=1, wrt=wrt) + (s_star[:, :, self.first_observed:] @ Sig_inv - np.einsum('jk, ikl -> ijl', self.Sig_tp1_t_lim[:, self.first_observed:], s_tilde)) @ (observations[0] - self.X_hat_tp1_t_list_hom[0, self.first_observed:]) - np.einsum('jk, ik -> ij', k_tilde, self.E_0(order=1, wrt=wrt)[:, self.first_observed:])]
+        V_tp1_t_list.append(partial_a + partial_A @ self.X_hat_tt_list_hom[0] + np.einsum('jk, ik -> ij', self.A(), V_tt_list[0]))
         V_tp1_t = V_tp1_t_list[-1]
         if isinstance(verbose, tqdm):
             tr = verbose
@@ -429,11 +436,12 @@ class KalmanFilter:
 
 
 class PolynomialModel:
-    def __init__(self, first_observed, true_param=None, x=None):
+    def __init__(self, first_observed, E_0, Cov_0, true_param=None):
         self.first_observed = first_observed
         self.true_param = np.array(true_param) if true_param is not None else None
-        self.x = np.array(x)
-        self.dim = np.size(x)
+        self.E_0 = E_0
+        self.Cov_0 = Cov_0
+        self.dim = np.size(E_0)
         self.params_names = np.repeat('', self.dim)
         self.params_bounds = None
         self.savestring = ''
