@@ -224,7 +224,7 @@ class KalmanFilter:
         self.X_hat_tp1_t_list_hom = None
         self.X_hat_tt_list_hom = None
 
-    def build_covariance(self, t_max=1000):
+    def build_covariance(self, t_max=100000):
         Sig_tp1_t_list = [np.zeros([self.dim, self.dim]), self.C(t=1)]
         Sig_tt_list = [np.zeros([self.dim, self.dim])]
         Sig_tp1_t = Sig_tp1_t_list[-1]
@@ -429,17 +429,31 @@ class KalmanFilter:
 
 
 class PolynomialModel:
-    def __init__(self, first_observed, true_param, x):
+    def __init__(self, first_observed, true_param=None, x=None):
         self.first_observed = first_observed
-        self.true_param = np.array(true_param)
+        self.true_param = np.array(true_param) if true_param is not None else None
         self.x = np.array(x)
         self.dim = np.size(x)
         self.params_names = np.repeat('', self.dim)
         self.params_bounds = None
         self.savestring = ''
         self.observations = None
-        self.model_name = ''
         self.seed = None
+        self.wrt = None
+
+        self.filter_c = None
+        self.filter_c2 = None
+        self.filter_C = None
+        self.filter_C2 = None
+        self.filter_Y = None
+        self.filter_Y2 = None
+        self.filter_B = None
+        self.lim_expec = None
+        self.filter_B2 = None
+        self.lim_expec2 = None
+        self.U = None
+        self.W = None
+        self.kalman_filter = None
 
     @staticmethod
     def a(param, order=None, wrt=None):
@@ -453,38 +467,104 @@ class PolynomialModel:
     def B(param, order):
         pass
 
+    def C(self, param, t):
+        pass
+
     @staticmethod
     def C_lim(param, order=None, wrt=None):
         pass
 
     @staticmethod
     def Q(param, num):
-        kappa, theta, sigma, rho = param
-        if num == 2:
-            result = np.zeros((9, 9))
-            result[-1, 0] = 2 / kappa**2 * (1 - np.exp(-kappa))**2
-            return result
-        elif num == 1:
-            N11 = 1 / kappa * np.exp(-kappa) * (1 - np.exp(-kappa)) * sigma**2
-            N12 = rho * sigma * np.exp(-kappa)
-            N13 = -sigma**2 / kappa**2 * np.exp(-kappa) * (1 - np.exp(-kappa)) + sigma**2 / kappa * (1 + kappa * rho**2) * np.exp(-kappa)
-            N22 = 1 / kappa * (1 - np.exp(-kappa))
-            N23 = 3 * rho * sigma / kappa**2 * (1 - np.exp(-kappa) - kappa * np.exp(-kappa))
-            N33 = 1 / kappa**3 * (6 * sigma**2 * (1 + 2 * rho**2) + 4 * kappa**2 * theta) * (1 - np.exp(-kappa)) - 1 / kappa**3 * (3 * sigma**2 + 4 * kappa * theta) * (1 - np.exp(-kappa))**2 - 6 * sigma**2 / kappa**2 * (1 + 2 * rho**2 + rho**2 * kappa) * np.exp(-kappa)
-            result = np.zeros((9, 3))
-            result[:, 0] = np.array([N11, N12, N13, N12, N22, N23, N13, N23, N33])
-            return result
-        elif num == 0:
-            N11 = (1 - np.exp(-kappa))**2 * sigma**2 / (2 * kappa) * theta
-            N12 = theta / kappa * rho * sigma * (1 - np.exp(-kappa) - kappa * np.exp(-kappa))
-            N13 = sigma**2 * theta / (2 * kappa**2) * (1 + 4 * rho**2 + np.exp(-kappa)) * (1 - np.exp(-kappa)) - sigma**2 * theta / kappa * (1 + (kappa + 2) * rho**2) * np.exp(-kappa)
-            N22 = theta + theta / kappa * (np.exp(-kappa) - 1)
-            N23 = 3 * rho * sigma / kappa**2 * theta * (kappa - 2 + (kappa + 2) * np.exp(-kappa))
-            N33 = 1 / kappa**3 * (9 * sigma**2 * theta * (1 + 4 * rho**2) + 4 * kappa**2 * theta**2) * (np.exp(-kappa) - 1) + 1 / kappa**3 * (2 * kappa * theta**2 + 3 / 2 * sigma**2 * theta) * (np.exp(-kappa) - 1)**2 + 6 * sigma**2 / kappa**2 * theta * (1 + 4 * rho**2 + kappa * rho**2) * np.exp(-kappa) + 3 * sigma**2 / kappa**2 * theta * (1 + 4 * rho**2) + 2 * theta**2
-            return np.array([N11, N12, N13, N12, N22, N23, N13, N23, N33])
-
-    def C(self, param, t):
         pass
+
+    def setup_filter(self, wrt):
+        if self.true_param is None:
+            raise Exception('Underlying parameter has to be given or has to be estimated first.')
+
+        self.wrt = wrt
+
+        filepath_B = './saves/' + self.model_name + '/B{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+        if os.path.exists(filepath_B):
+            self.filter_B = np.loadtxt(filepath_B)
+            self.lim_expec = np.append(1, np.linalg.inv(np.eye(self.filter_B.shape[0] - 1) - self.filter_B[1:, 1:]) @ self.filter_B[1:, 0])
+
+        filepath_B2 = './saves/' + self.model_name + '/B2{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+        if os.path.exists(filepath_B):
+            self.filter_B2 = np.loadtxt(filepath_B2)
+            self.lim_expec2 = np.append(1, np.linalg.inv(np.eye(self.filter_B2.shape[0] - 1) - self.filter_B2[1:, 1:]) @ self.filter_B2[1:, 0])
+
+        filepath_U = './saves/' + self.model_name + '/U{}_firstobserved{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+        filepath_W = './saves/' + self.model_name + '/W{}_firstobserved{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+        self.U = np.atleast_2d(np.loadtxt(filepath_U)) if os.path.exists(filepath_U) else None
+        self.W = np.atleast_2d(np.loadtxt(filepath_W)) if os.path.exists(filepath_W) else None
+
+        self.dicts = return_dict(self.dim * (np.size(wrt) + 2), order=4)
+        self.dicts2 = return_dict(self.dim * (int(np.size(wrt) * (np.size(wrt) + 1) / 2) + np.size(wrt) + 2), order=2)
+
+        partial_a = partial(self.a, param=self.true_param)
+        partial_A = partial(self.A, param=self.true_param)
+        partial_C = partial(self.C, param=self.true_param)
+        partial_C_lim = partial(self.C_lim, param=self.true_param)
+        self.kalman_filter = KalmanFilter(dim=self.dim, a=partial_a, A=partial_A, C=partial_C, C_lim=partial_C_lim, first_observed=self.first_observed)
+        self.kalman_filter.build_covariance()
+
+        k = np.size(self.wrt)
+        a_0 = self.a(self.true_param, order=0)
+        a_1 = self.a(self.true_param, order=1, wrt=self.wrt)
+        a_2 = self.a(self.true_param, order=2, wrt=self.wrt)
+        self.filter_c = np.append(a_0, a_1.flatten())
+        self.filter_c2 = np.hstack((a_0, a_1.flatten(), a_2.flatten()))
+
+        A_0 = self.kalman_filter.K_lim @ self.kalman_filter.H
+        A_00 = self.kalman_filter.F_lim
+
+        S = self.kalman_filter.S_star(wrt=self.wrt)
+        R = self.kalman_filter.R_star(wrt=self.wrt)
+        Sig = self.kalman_filter.Sig_tp1_t_lim
+        Sig_inv = np.linalg.inv(Sig[self.first_observed:, self.first_observed:])
+        S_tilde = Sig_inv @ S[:, self.first_observed:, self.first_observed:] @ Sig_inv
+        K_tilde = Sig[:, self.first_observed:] @ Sig_inv
+
+        S_i = S[np.triu_indices(k)[0]]
+        S_j = S[np.triu_indices(k)[1]]
+        S_i_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, S_i[:, self.first_observed:, self.first_observed:], Sig_inv)
+        S_j_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, S_j[:, self.first_observed:, self.first_observed:], Sig_inv)
+        S_hat = np.einsum('ijk, ikl -> ijl', S_j[:, :, self.first_observed:], S_i_tilde) + np.einsum('ijk, ikl -> ijl', S_i[:, :, self.first_observed:], S_j_tilde)
+        S_hat_o = np.einsum('ijk, ikl -> ijl', S_j[:, self.first_observed:, self.first_observed:], S_i_tilde) + np.einsum('ijk, ikl -> ijl', S_i[:, self.first_observed:, self.first_observed:], S_j_tilde)
+        SS = (S[:, :, self.first_observed:] @ Sig_inv - Sig[:, self.first_observed:] @ S_tilde)
+
+        A_1 = (self.A(self.true_param, order=1, wrt=self.wrt) @ K_tilde + self.A(self.true_param) @ SS) @ self.kalman_filter.H
+        A_10 = self.A(self.true_param, order=1, wrt=self.wrt) @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - self.A(self.true_param) @ SS @ self.kalman_filter.H
+        A_11 = self.kalman_filter.F_lim
+
+        prod_i = np.einsum('ijk, lkm -> iljm', self.A(self.true_param, order=1, wrt=self.wrt), SS) @ self.kalman_filter.H
+        prod_ij = (prod_i + np.transpose(prod_i, (1, 0, 2, 3)))[np.triu_indices(k)]
+        M = R[:, :, self.first_observed:] @ Sig_inv - S_hat + np.einsum('jk, ikl -> ijl', K_tilde, S_hat_o) - np.einsum('jk, ikl, lm -> ijm', K_tilde, R[:, self.first_observed:, self.first_observed:], Sig_inv)
+        N_i = np.einsum('jk, ikl -> ijl', Sig[:, self.first_observed:], S_i_tilde) - S_i[:, :, self.first_observed:] @ Sig_inv
+        N_j = np.einsum('jk, ikl -> ijl', Sig[:, self.first_observed:], S_j_tilde) - S_j[:, :, self.first_observed:] @ Sig_inv
+
+        A_2 = self.A(self.true_param, order=2, wrt=self.wrt) @ K_tilde @ self.kalman_filter.H + prod_ij + self.A(self.true_param) @ M @ self.kalman_filter.H
+        A_20 = self.A(self.true_param, order=2, wrt=self.wrt) @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - prod_ij - self.A(self.true_param) @ M @ self.kalman_filter.H
+        A_21_i = self.A(self.true_param, order=1, wrt=self.wrt)[np.triu_indices(k)[0]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + self.A(self.true_param) @ N_i @ self.kalman_filter.H
+        A_21_j = self.A(self.true_param, order=1, wrt=self.wrt)[np.triu_indices(k)[1]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + self.A(self.true_param) @ N_j @ self.kalman_filter.H
+        A_22 = self.kalman_filter.F_lim
+
+        self.filter_C = np.block([[A_0], [np.vstack(A_1)]])
+        self.filter_C2 = np.block([[A_0], [np.vstack(A_1)], [np.vstack(A_2)]])
+
+        self.filter_Y = np.block([[A_00, np.zeros((self.dim, self.dim * k))], [np.vstack(A_10), np.kron(np.eye(k), A_11)]])
+        first_row_Y2 = [A_00, np.zeros((self.dim, self.dim * int(k + k * (k + 1) / 2)))]
+        second_row_Y2 = [np.vstack(A_10), np.kron(np.eye(k), A_11), np.zeros((self.dim * k, self.dim * int(k * (k + 1) / 2)))]
+
+        block = np.zeros((self.dim * int(k * (k + 1) / 2), self.dim * k))
+        for l in range(int(k * (k + 1) / 2)):
+            i, j = np.triu_indices(k)[0][l], np.triu_indices(k)[1][l]
+            block[(self.dim * l):(self.dim * (l + 1)), (self.dim * i):(self.dim * (i + 1))] += A_21_j[l]
+            block[(self.dim * l):(self.dim * (l + 1)), (self.dim * j):(self.dim * (j + 1))] += A_21_i[l]
+
+        third_row_Y2 = [np.vstack(A_20), block, np.kron(np.eye(int(k * (k + 1) / 2)), A_22)]
+        self.filter_Y2 = np.block([first_row_Y2, second_row_Y2, third_row_Y2])
 
     def generate_observations(self, t_max, seed, verbose):
         pass
@@ -858,17 +938,17 @@ class PolynomialModel:
 
 
 class HestonModel(PolynomialModel):
-    def __init__(self, first_observed, kappa, theta_vol, sig, rho, v0):
+    def __init__(self, first_observed, kappa, theta_vol, sig, rho, v0, wrt=None):
         self.true_param = np.array([kappa, theta_vol**2, sig, rho])
         self.x = np.array([v0, 0, 0])
 
         super().__init__(first_observed, self.true_param, self.x)
         self.v0 = v0
         self.dim = 3
+        self.model_name = 'HestonModel'
         self.params_names = np.array(['kappa', 'theta', 'sigma', 'rho'])
         self.params_bounds = np.array([[0.0001, 10], [0.0001 ** 2, 1], [0.0001, 1], [-1, 1]])
         self.savestring = '{}_{}_{}_{}'.format(kappa, theta_vol, sig, rho)
-        self.model_name = 'HestonModel'
         self.observations = None
         self.seed = None
 
