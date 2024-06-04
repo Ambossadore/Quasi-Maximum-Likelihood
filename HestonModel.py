@@ -1274,12 +1274,18 @@ class OUNIGModel(PolynomialModel):
         OU_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = kappa
         OU_A[mult_to_ind([0, 1], dicts), mult_to_ind([0, 1], dicts)] = -kappa
 
-        bessel_kernel = lambda y, x: 2 * delta * (alpha / (2 * np.pi * np.sqrt(x**2 + y**2)))**(3 / 2) * kv(3 / 2, alpha * np.sqrt(x**2 + y**2))
-        OU_A[mult_to_ind([2, 2], dicts), 0] = 4 * dblquad(lambda y, x: x**2 * y**2 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
-        OU_A[mult_to_ind([2, 0], dicts), 0] = 4 * dblquad(lambda y, x: x**2 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
-        OU_A[mult_to_ind([0, 2], dicts), 0] = 4 * dblquad(lambda y, x: x**2 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
-        OU_A[mult_to_ind([4, 0], dicts), 0] = 4 * dblquad(lambda y, x: x**4 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
-        OU_A[mult_to_ind([0, 4], dicts), 0] = 4 * dblquad(lambda y, x: x**4 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
+        # bessel_kernel = lambda y, x: 2 * delta * (alpha / (2 * np.pi * np.sqrt(x**2 + y**2)))**(3 / 2) * kv(3 / 2, alpha * np.sqrt(x**2 + y**2))
+        # OU_A[mult_to_ind([2, 2], dicts), 0] = 4 * dblquad(lambda y, x: x**2 * y**2 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
+        # OU_A[mult_to_ind([2, 0], dicts), 0] = 4 * dblquad(lambda y, x: x**2 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
+        # OU_A[mult_to_ind([0, 2], dicts), 0] = 4 * dblquad(lambda y, x: x**2 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
+        # OU_A[mult_to_ind([4, 0], dicts), 0] = 4 * dblquad(lambda y, x: x**4 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
+        # OU_A[mult_to_ind([0, 4], dicts), 0] = 4 * dblquad(lambda y, x: x**4 * bessel_kernel(x, y), 0, np.inf, 0, np.inf)[0]
+
+        OU_A[mult_to_ind([2, 2], dicts), 0] = delta / alpha ** 3
+        OU_A[mult_to_ind([2, 0], dicts), 0] = delta / alpha
+        OU_A[mult_to_ind([0, 2], dicts), 0] = delta / alpha
+        OU_A[mult_to_ind([4, 0], dicts), 0] = 3 * delta / alpha ** 3
+        OU_A[mult_to_ind([0, 4], dicts), 0] = 3 * delta / alpha ** 3
 
         OU_Bc = np.zeros(OU_A.shape)
         for i in range(OU_A.shape[0]):
@@ -2399,7 +2405,7 @@ class FilteredOUNIGModel(PolynomialModel):
 ## Heston wrt = [1, 2, 3] --> 7672.88s
 ## Heston wrt = [0, 1, 2, 3] --> 59413.14s
 tic = time()
-hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=2)
+hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=3)
 V, Std, Corr = hestonf.calculate_V()
 toc = time()
 print(toc - tic)
