@@ -2,6 +2,7 @@ import numpy as np
 from scipy.special import binom
 from scipy.stats import invgauss
 from itertools import combinations_with_replacement
+from z3 import Int, Solver, And, Or, Sum, sat
 
 
 def n_dim(d, order):
@@ -18,11 +19,6 @@ def return_dict(d, order):
 
 def ind_to_mult(ind, dicts):
     return dicts[ind]
-
-
-# def mult_to_ind(ind, dicts):
-#     dims = dicts.max(0) + 1
-#     return np.where(np.in1d(np.ravel_multi_index(dicts.T, dims), np.ravel_multi_index(np.array(ind).T, dims)))[0]
 
 
 def mult_to_ind(ind, dicts):
@@ -48,6 +44,27 @@ def mask(mult, dicts, typ):
         return dicts.sum(axis=1) == np.sum(mult)
     elif typ == 'leq_abs':
         return dicts.sum(axis=1) <= np.sum(mult)
+
+
+def solve_int(A, b, R=None, maxnumsol=24):
+    """Solves a constrained linear system of equations Ax = b, Rx >= 0, over the integers"""
+
+    m, n = np.shape(A)
+    r = np.shape(R)[0]
+    X = [Int('x%d' % i) for i in range(n)]
+    s = Solver()
+
+    s.add(And([Sum([A[i][j] * X[j] for j in range(n)]) == b[i] for i in range(m)]))
+    s.add(And([Sum([R[i][j] * X[j] for j in range(n)]) >= 0 for i in range(r)]))
+
+    sol = []
+    while (s.check() == sat) & (len(sol) < maxnumsol):
+        part = [s.model().evaluate(X[i]).as_long() for i in range(n)]
+        forbid = Or([X[i] != part[i] for i in range(n)])
+        sol.append(part)
+        s.add(forbid)
+
+    return np.array(sol)
 
 
 def unit_vec(k, j, as_column=False):
