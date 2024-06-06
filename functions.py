@@ -1,8 +1,11 @@
+from itertools import combinations_with_replacement
+
 import numpy as np
 from scipy.special import binom
 from scipy.stats import invgauss
-from itertools import combinations_with_replacement
 from z3 import Int, Solver, And, Or, Sum, sat
+
+it = 1
 
 
 def n_dim(d, order):
@@ -76,6 +79,26 @@ def unit_vec(k, j, as_column=False):
         return vec
 
 
+
+def format_time(secs):
+    if secs < 60:
+        return '{:.2f}s'.format(secs)
+    else:
+        mins = secs // 60
+        secs -= mins * 60
+        if mins < 60:
+            return '{:.0f}min {:.0f}s'.format(mins, secs)
+        else:
+            hrs = mins // 60
+            mins -= hrs * 60
+            if hrs < 24:
+                return '{:.0f}h {:.0f}min {:.0f}s'.format(hrs, mins, secs)
+            else:
+                days = hrs // 24
+                hrs -= days * 24
+                return '{:.0f}d {:.0f}h {:.0f}min {:.0f}s'.format(days, hrs, mins, secs)
+
+
 def tracy_singh(A, B, A_partition, B_partition):
     num_blocks_A = (A.shape[0] // A_partition[0], A.shape[1] // A_partition[1])
     num_blocks_B = (B.shape[0] // B_partition[0], B.shape[1] // B_partition[1])
@@ -111,8 +134,52 @@ def sym(arr):
         return arr + np.transpose(arr, (0, 2, 1))
 
 
+def kron_sum(A, B):
+    return np.kron(np.eye(B.shape[0]), A) + np.kron(B, np.eye(A.shape[0]))
+
+
+def kron_sym(A, B):
+    return np.kron(A, B) + np.kron(B, A)
+
+
 def invgauss_bn(xi, eta, size, seed=None):
     mu = xi / eta
     lamb = xi**2
     return invgauss.rvs(mu=mu / lamb, loc=0, scale=lamb, size=size, random_state=seed)
 
+
+class InitialDistribution:
+    def __init__(self, dist, hyper=None):
+        self.dist = dist
+        self.hyper = np.array(hyper) if hyper is not None else None
+
+    def E_0(self, param=None, order=0, wrt=None):
+        if self.dist == 'Dirac':
+            wrt = np.atleast_1d(wrt)
+            if order == 0:
+                return self.hyper
+            elif order == 1:
+                deriv_array = np.zeros((np.size(self.params), np.size(self.hyper)))
+                return deriv_array[wrt]
+            elif order == 2:
+                deriv_array = np.zeros((np.size(self.params), np.size(self.params), np.size(self.hyper)))
+                deriv_array = deriv_array[np.ix_(wrt, wrt)]
+                return deriv_array[np.triu_indices(len(wrt))]
+
+    def Cov_0(self, param=None, order=0, wrt=None):
+        if self.dist == 'Dirac':
+            wrt = np.atleast_1d(wrt)
+            if order == 0:
+                return np.zeros((np.size(self.hyper), np.size(self.hyper)))
+            elif order == 1:
+                deriv_array = np.zeros((np.size(self.params), np.size(self.hyper), np.size(self.hyper)))
+                return deriv_array[wrt]
+            elif order == 2:
+                deriv_array = np.zeros((np.size(self.params), np.size(self.params), np.size(self.hyper), np.size(self.hyper)))
+                deriv_array = deriv_array[np.ix_(wrt, wrt)]
+                return deriv_array[np.triu_indices(len(wrt))]
+
+    def sample(self, param=None, n=1):
+        if self.dist == 'Dirac':
+            sample = np.tile(self.hyper, (n, 1))
+            return sample.squeeze()

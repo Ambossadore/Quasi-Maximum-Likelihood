@@ -12,8 +12,6 @@ from tqdm import tqdm, trange
 
 from functions import *
 
-it = 1
-
 
 class KalmanFilter:
     def __init__(self, dim, a, A, C, E_0, Cov_0, C_lim=None, first_observed=0):
@@ -248,11 +246,10 @@ class KalmanFilter:
 
 
 class PolynomialModel:
-    def __init__(self, first_observed, E_0, Cov_0, true_param=None):
+    def __init__(self, first_observed, init, true_param=None):
         self.first_observed = first_observed
         self.true_param = np.array(true_param) if true_param is not None else None
-        self.E_0 = E_0
-        self.Cov_0 = Cov_0
+        self.init = init
         self.dim = None
         self.params_names = ''
         self.params_bounds = None
@@ -309,12 +306,12 @@ class PolynomialModel:
             C = self.filter_C4
             c = self.filter_c4
             Y = self.filter_Y4
-            filepath = './saves/' + self.model_name + '/Polynomial Matrices/B4{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+            filepath = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
         elif order == 2:
             C = self.filter_C2
             c = self.filter_c2
             Y = self.filter_Y2
-            filepath = './saves/' + self.model_name + '/Polynomial Matrices/B2{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+            filepath = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
         else:
             raise Exception('Argument order has to be 4 or 2.')
 
@@ -441,8 +438,8 @@ class PolynomialModel:
 
         self.wrt = wrt
 
-        filepath_U = './saves/' + self.model_name + '/Covariance/U{}_firstobserved{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
-        filepath_W = './saves/' + self.model_name + '/Covariance/W{}_firstobserved{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+        filepath_U = './saves/' + self.__class__.__name__ + '/Covariance/U{}_firstobserved{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+        filepath_W = './saves/' + self.__class__.__name__ + '/Covariance/W{}_firstobserved{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
         self.U = np.atleast_2d(np.loadtxt(filepath_U)) if os.path.exists(filepath_U) else None
         self.W = np.atleast_2d(np.loadtxt(filepath_W)) if os.path.exists(filepath_W) else None
 
@@ -452,8 +449,8 @@ class PolynomialModel:
         partial_a = partial(self.a, param=self.true_param)
         partial_A = partial(self.A, param=self.true_param)
         partial_C = partial(self.C, param=self.true_param)
-        partial_E_0 = partial(self.E_0, param=self.true_param)
-        partial_Cov_0 = partial(self.Cov_0, param=self.true_param)
+        partial_E_0 = partial(self.init.E_0, param=self.true_param)
+        partial_Cov_0 = partial(self.init.Cov_0, param=self.true_param)
         partial_C_lim = partial(self.C_lim, param=self.true_param)
         self.kalman_filter = KalmanFilter(dim=self.dim, a=partial_a, A=partial_A, C=partial_C, E_0=partial_E_0, Cov_0=partial_Cov_0, C_lim=partial_C_lim, first_observed=self.first_observed)
         self.kalman_filter.build_covariance()
@@ -515,14 +512,14 @@ class PolynomialModel:
         third_row_Y2 = [np.vstack(A_20), block, np.kron(np.eye(int(k * (k + 1) / 2)), A_22)]
         self.filter_Y2 = np.block([first_row_Y2, second_row_Y2, third_row_Y2])
 
-        filepath_B4 = './saves/' + self.model_name + '/Polynomial Matrices/B4{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+        filepath_B4 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
         if os.path.exists(filepath_B4):
             self.filter_B4 = np.loadtxt(filepath_B4)
             self.lim_expec4 = np.append(1, np.linalg.inv(np.eye(self.filter_B4.shape[0] - 1) - self.filter_B4[1:, 1:]) @ self.filter_B4[1:, 0])
         else:
             self.calc_filter_B(order=4)
 
-        filepath_B2 = './saves/' + self.model_name + '/Polynomial Matrices/B2{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+        filepath_B2 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
         if os.path.exists(filepath_B2):
             self.filter_B2 = np.loadtxt(filepath_B2)
             self.lim_expec2 = np.append(1, np.linalg.inv(np.eye(self.filter_B2.shape[0] - 1) - self.filter_B2[1:, 1:]) @ self.filter_B2[1:, 0])
@@ -532,8 +529,31 @@ class PolynomialModel:
     def generate_observations(self, t_max, seed, verbose):
         pass
 
+    def generate_more_observations(self, t_max, dt, seed, verbose):
+        pass
+
+    @classmethod
+    def from_observations(cls, first_observed, init, obs, dt=None, true_param=None, wrt=None, seed=None):
+        if isinstance(obs, str):
+            filename = './saves/' + cls.__name__ + '/Observations/' + obs
+        else:
+            if seed is not None:
+                filename = './saves/' + cls.__name__ + '/Observations/observations_' + ''.join('{:.3f}_'.format(item) for item in true_param) + 'seed{}_{}obs.txt'.format(seed, obs)
+            else:
+                filename = './saves/' + cls.__name__ + '/Observations/observations_' + ''.join('{:.3f}_'.format(item) for item in true_param) + '{}obs.txt'.format(obs)
+        obj = cls(first_observed=first_observed, init=init, true_param=true_param, wrt=wrt)
+
+        if os.path.exists(filename):
+            observations = np.loadtxt(filename)
+            obj.observations = observations
+        else:
+            obj.generate_observations(t_max=obs, dt=dt, seed=seed, verbose=1)
+
+        obj.seed = seed
+        return obj
+
     def log_lik(self, param, t, verbose=0):
-        kfilter = KalmanFilter(dim=self.dim, a=partial(self.a, param=param), A=partial(self.A, param=param), C=partial(self.C, param=param), E_0=partial(self.E_0, param=param), Cov_0=partial(self.Cov_0, param=param), first_observed=self.first_observed)
+        kfilter = KalmanFilter(dim=self.dim, a=partial(self.a, param=param), A=partial(self.A, param=param), C=partial(self.C, param=param), E_0=partial(self.init.E_0, param=param), Cov_0=partial(self.init.Cov_0, param=param), first_observed=self.first_observed)
         kfilter.build_covariance(t_max=t)
         kfilter.build_kalman_filter(observations=self.observations, t_max=t, verbose=verbose)
         eps = (self.observations[1:t + 1, self.first_observed:] - kfilter.X_hat_tp1_t_list[1:t + 1, self.first_observed:])
@@ -546,7 +566,7 @@ class PolynomialModel:
             Sig_tp1_t_list_det = np.append(Sig_tp1_t_list_det, np.repeat(final_det, t - kfilter.Sig_tp1_t_list.shape[0] + 1))
         return np.sum(-0.5 * (Sig_tp1_t_list_det[:t] + np.einsum('ij, ijk, ik -> i', eps, Sig_tp1_t_list_inv[:t, :, :], eps)))
 
-    def fit_qml(self, fit_parameter, initial, t=None, verbose=1):
+    def fit_qml(self, fit_parameter, initial, t=None, verbose=1, update_estimate=False):
         global it
         it = 1
 
@@ -557,6 +577,11 @@ class PolynomialModel:
         fix_indices = fix_keys - np.arange(len(fix_keys))
         params_names = np.atleast_1d(self.params_names[fit_parameter])
 
+        if np.isnan(np.array(self.true_param)[fix_keys]).any():
+            raise Exception('Cannot fix parameters ' + ', '.join(self.params_names[fix_keys]) + ' if they are not known in advance')
+        if np.isnan(self.true_param).any():
+            update_estimate = True
+
         neg_loglik = lambda param: -self.log_lik(np.insert(param, fix_indices, np.array(self.true_param)[fix_keys]), t)
 
         def callback(params):
@@ -566,32 +591,45 @@ class PolynomialModel:
             it += 1
 
         bounds = np.atleast_2d(self.params_bounds[fit_parameter]).tolist()
-        start = time.time()
+        start = time()
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             if verbose == 1:
                 res = minimize(neg_loglik, initial, bounds=bounds, callback=callback, method='L-BFGS-B')
             else:
                 res = minimize(neg_loglik, initial, bounds=bounds, method='L-BFGS-B')
-        end = time.time()
+        end = time()
         if verbose == 1:
             print('Elapsed Time: ' + format_time(end - start))
-        if np.size(res.x) == 1:
-            return res.x[0]
-        else:
-            return res  # TODO: Isn't there a res.x?
 
-    def fit_qml_sequence(self, fit_parameter, initial, t_max=None, every=50, verbose=1):
-        start = time.time()
+        result = res.x[0] if np.size(res.x) == 1 else res.x
+
+        if update_estimate:
+            self.true_param[fit_parameter] = result
+            self.savestring = '{:.3f}_{:.3f}_{:.3f}_{:.3f}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])
+
+        return result
+
+    def fit_qml_sequence(self, fit_parameter, initial, t_max=None, every=50, verbose=1, update_estimate=False):
+        start = time()
         fit_parameter = np.atleast_1d(fit_parameter).tolist()
+
+        if np.isnan(self.true_param).any():
+            update_estimate = True
+
         if t_max is None:
             t_max = self.observations.shape[0] - 1
         if self.seed is not None:
-            filename = self.model_name + '/QML Sequences/qml{}_firstobserved{}_seed{}_{}obs_every{}th.txt'.format(fit_parameter, self.first_observed, self.seed, t_max, every)
+            filename = './saves/' + self.__class__.__name__ + '/QML Sequences/qml{}_firstobserved{}_{}_seed{}_{}obs_every{}th.txt'.format(fit_parameter, self.first_observed, self.savestring, self.seed, t_max, every)
         else:
-            filename = self.model_name + '/QML Sequences/qml{}_firstobserved{}_{}obs_every{}th.txt'.format(fit_parameter, self.first_observed, t_max, every)
+            filename = './saves/' + self.__class__.__name__ + '/QML Sequences/qml{}_firstobserved{}_{}_{}obs_every{}th.txt'.format(fit_parameter, self.first_observed, self.savestring, t_max, every)
         if os.path.exists(filename):
             qml_list = np.loadtxt(filename)
+
+            if update_estimate:
+                self.true_param[fit_parameter] = qml_list[-1]
+                self.savestring = '{:.3f}_{:.3f}_{:.3f}_{:.3f}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])
+
         else:
             t_range = np.arange(t_max + every)[::every][1:]
             qml_list = []
@@ -599,13 +637,19 @@ class PolynomialModel:
                 t_range = tqdm(t_range)
             for t in t_range:
                 if verbose == 1:
-                    current = time.time()
+                    current = time()
                     print('Fitting QML with t = {} observations. Total Elapsed Time: {}'.format(t, format_time(current - start)))
                 qml_list.append(self.fit_qml(fit_parameter=fit_parameter, initial=initial, t=t, verbose=verbose))
                 initial = qml_list[-1]
             qml_list = np.array(qml_list)
+
+            if update_estimate:
+                self.true_param[fit_parameter] = qml_list[-1]
+                self.savestring = '{:.3f}_{:.3f}_{:.3f}_{:.3f}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])
+
             np.savetxt(filename, qml_list)
-        end = time.time()
+
+        end = time()
         if verbose == 1:
             print('Total Elapsed Time: ' + format_time(end - start))
         return qml_list
@@ -670,7 +714,7 @@ class PolynomialModel:
             U = coefs_U @ self.lim_expec4
             self.U = U
 
-            filepath_U = './saves/' + self.model_name + '/Covariance/U{}_firstobserved{}_{}.txt'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring)
+            filepath_U = './saves/' + self.__class__.__name__ + '/Covariance/U{}_firstobserved{}_{}.txt'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring)
             np.savetxt(filepath_U, U)
 
             return U
@@ -680,9 +724,9 @@ class PolynomialModel:
                 t_max = self.observations.shape[0] - 1
 
             if self.seed is not None:
-                filepath = './saves/' + self.model_name + '/Covariance/U_raw{}_firstobserved{}_seed{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.seed, t_max)
+                filepath = './saves/' + self.__class__.__name__ + '/Covariance/U_raw{}_firstobserved{}_{}_seed{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring, self.seed, t_max)
             else:
-                filepath = './saves/' + self.model_name + '/Covariance/U_raw{}_firstobserved{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, t_max)
+                filepath = './saves/' + self.__class__.__name__ + '/Covariance/U_raw{}_firstobserved{}_{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring, t_max)
             if os.path.exists(filepath):
                 return cummean(pkl.load(open(filepath, 'rb')), axis=0)
 
@@ -696,8 +740,8 @@ class PolynomialModel:
                 C = partial(self.C, param=param)
                 a = partial(self.a, param=param)
                 A = partial(self.A, param=param)
-                E_0 = partial(self.E_0, param=param)
-                Cov_0 = partial(self.Cov_0, param=param)
+                E_0 = partial(self.init.E_0, param=param)
+                Cov_0 = partial(self.init.Cov_0, param=param)
                 C_lim = partial(self.C_lim, param=param)
 
                 kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=E_0, Cov_0=Cov_0, C_lim=C_lim, first_observed=self.first_observed)
@@ -823,7 +867,7 @@ class PolynomialModel:
             W[np.triu_indices(k)[1], np.triu_indices(k)[0]] = W_components
             self.W = W
 
-            filepath_W = './saves/' + self.model_name + '/Covariance/W{}_firstobserved{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+            filepath_W = './saves/' + self.__class__.__name__ + '/Covariance/W{}_firstobserved{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
             np.savetxt(filepath_W, W)
 
             return W
@@ -833,9 +877,9 @@ class PolynomialModel:
                 t_max = self.observations.shape[0] - 1
 
             if self.seed is not None:
-                filepath = './saves/' + self.model_name + '/Covariance/W_raw{}_firstobserved{}_seed{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.seed, t_max)
+                filepath = './saves/' + self.__class__.__name__ + '/Covariance/W_raw{}_firstobserved{}_{}_seed{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring, self.seed, t_max)
             else:
-                filepath = './saves/' + self.model_name + '/Covariance/W_raw{}_firstobserved{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.seed, t_max)
+                filepath = './saves/' + self.__class__.__name__ + '/Covariance/W_raw{}_firstobserved{}_{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring, self.seed, t_max)
             if os.path.exists(filepath):
                 return cummean(pkl.load(open(filepath, 'rb')), axis=0)
 
@@ -850,8 +894,8 @@ class PolynomialModel:
                 C = partial(self.C, param=param)
                 a = partial(self.a, param=param)
                 A = partial(self.A, param=param)
-                E_0 = partial(self.E_0, param=param)
-                Cov_0 = partial(self.Cov_0, param=param)
+                E_0 = partial(self.init.E_0, param=param)
+                Cov_0 = partial(self.init.Cov_0, param=param)
                 C_lim = partial(self.C_lim, param=param)
 
                 kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=E_0, Cov_0=Cov_0, C_lim=C_lim, first_observed=self.first_observed)
@@ -926,18 +970,22 @@ class PolynomialModel:
 
             if every is not None:
                 if self.seed is not None:
-                    filepath = self.model_name + '/Covariance/V_raw{}_firstobserved{}_seed{}_{}obs_every{}th.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.seed, t_max, every)
+                    filepath = self.__class__.__name__ + '/Covariance/V_raw{}_firstobserved{}_{}_seed{}_{}obs_every{}th.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring, self.seed, t_max, every)
                 else:
-                    filepath = self.model_name + '/Covariance/V_raw{}_firstobserved{}_{}obs_every{}th.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, t_max, every)
+                    filepath = self.__class__.__name__ + '/Covariance/V_raw{}_firstobserved{}_{}_{}obs_every{}th.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring, t_max, every)
             else:
                 if self.seed is not None:
-                    filepath = self.model_name + '/Covariance/V_raw{}_firstobserved{}_seed{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.seed, t_max)
+                    filepath = self.__class__.__name__ + '/Covariance/V_raw{}_firstobserved{}_{}_seed{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring, self.seed, t_max)
                 else:
-                    filepath = self.model_name + '/Covariance/V_raw{}_firstobserved{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, t_max)
+                    filepath = self.__class__.__name__ + '/Covariance/V_raw{}_firstobserved{}_{}_{}obs.pkl'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring, t_max)
 
             if from_raw is not None:
-                U_raw_path = [self.model_name + '/Covariance/U_raw{}_firstobserved{}_seed'.format(np.atleast_1d(wrt).tolist(), self.first_observed) + filepath + 'obs.pkl' for filepath in from_raw]
-                W_raw_path = [self.model_name + '/Covariance/W_raw{}_firstobserved{}_seed'.format(np.atleast_1d(wrt).tolist(), self.first_observed) + filepath + 'obs.pkl' for filepath in from_raw]
+                if self.seed is not None:
+                    U_raw_path = [self.__class__.__name__ + '/Covariance/U_raw{}_firstobserved{}_{}_seed'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring) + filepath + 'obs.pkl' for filepath in from_raw]
+                    W_raw_path = [self.__class__.__name__ + '/Covariance/W_raw{}_firstobserved{}_{}_seed'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring) + filepath + 'obs.pkl' for filepath in from_raw]
+                else:
+                    U_raw_path = [self.__class__.__name__ + '/Covariance/U_raw{}_firstobserved{}_{}'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring) + filepath + 'obs.pkl' for filepath in from_raw]
+                    W_raw_path = [self.__class__.__name__ + '/Covariance/W_raw{}_firstobserved{}_{}'.format(np.atleast_1d(wrt).tolist(), self.first_observed, self.savestring) + filepath + 'obs.pkl' for filepath in from_raw]
 
                 U_raw = [pkl.load(open(filepath, 'rb')) for filepath in U_raw_path]
                 W_raw = [pkl.load(open(filepath, 'rb')) for filepath in W_raw_path]
@@ -964,8 +1012,8 @@ class PolynomialModel:
                     C = partial(self.C, param=param)
                     a = partial(self.a, param=param)
                     A = partial(self.A, param=param)
-                    E_0 = partial(self.E_0, param=param)
-                    Cov_0 = partial(self.Cov_0, param=param)
+                    E_0 = partial(self.init.E_0, param=param)
+                    Cov_0 = partial(self.init.Cov_0, param=param)
                     C_lim = partial(self.C_lim, param=param)
 
                     if t_max >= self.observations.shape[0]:
@@ -1003,21 +1051,21 @@ class PolynomialModel:
 
 
 class HestonModel(PolynomialModel):
-    def __init__(self, first_observed, E_0, Cov_0, true_param=None, wrt=None):
+    def __init__(self, first_observed, init, true_param=None, wrt=None):
         if true_param is None:
             true_param = np.repeat(np.nan, 4)
 
-        super().__init__(first_observed, E_0, Cov_0, true_param)
+        super().__init__(first_observed, init, true_param)
         self.dim = 3
-        self.model_name = 'HestonModel'
         self.params_names = np.array(['kappa', 'theta', 'sigma', 'rho'])
         self.params_bounds = np.array([[0.0001, 10], [0.0001 ** 2, 1], [0.0001, 1], [-1, 1]])
 
         if not np.isnan(self.true_param).any():
             self.savestring = '{:.3f}_{:.3f}_{:.3f}_{:.3f}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])
-
-        if wrt is not None:
-            self.setup_filter(wrt)
+            if wrt is not None:
+                self.setup_filter(wrt)
+        elif wrt is not None:
+            warnings.warn('Argument wrt was not used since the whole parameter has not yet been estimated. Please use method "setup_filter" after this has been done.', Warning)
 
     @staticmethod
     def a(param, order=0, wrt=np.array([0, 1, 2, 3])):
@@ -1093,8 +1141,8 @@ class HestonModel(PolynomialModel):
 
     def C(self, param, t):
         kappa, theta, sigma, rho = param
-        v0 = self.E_0(param)[0]
-        v0_2 = self.Cov_0(param)[0, 0] + v0**2
+        v0 = self.init.E_0(param)[0]
+        v0_2 = self.init.Cov_0(param)[0, 0] + v0**2
         B11 = (1 - np.exp(-kappa)) * sigma ** 2 / kappa * ((1 - np.exp(-kappa * t)) * theta + np.exp(-kappa * t) * v0 - (1 - np.exp(-kappa)) * theta / 2)
         B13 = sigma ** 2 / (2 * kappa ** 2) * ((1 + 4 * rho ** 2 - np.exp(-kappa)) * theta - 2 * (v0 - theta) * np.exp(-kappa * t)) * (1 - np.exp(-kappa)) + 1 / kappa * (sigma ** 2 * (1 + kappa * rho ** 2) * (v0 - theta) * np.exp(-kappa * t) - 2 * rho ** 2 * sigma ** 2 * theta * np.exp(-kappa))
         B33 = ((2 / kappa ** 2 * (v0_2 - 2 * theta * v0 + theta**2) - sigma ** 2 / kappa ** 3 * (2 * v0 - theta)) * np.exp(-2 * kappa * (t - 1)) - sigma ** 2 / kappa ** 3 * (v0 - theta) * np.exp(-kappa * (t - 1)) - sigma ** 2 / (2 * kappa ** 3) * theta) * (1 - np.exp(-kappa)) ** 2 + 2 / kappa ** 3 * (3 * sigma ** 2 * (1 + 2 * rho ** 2) + 2 * kappa ** 2 * theta) * (v0 - theta) * np.exp(-kappa * t) * (np.exp(kappa) - 1) - 6 * sigma ** 2 / kappa ** 2 * (1 + 2 * rho ** 2 + kappa * rho ** 2) * (v0 - theta) * np.exp(-kappa * t) - 3 * sigma ** 2 / kappa ** 3 * theta * (1 + 8 * rho ** 2) * (1 - np.exp(-kappa)) + 12 * sigma ** 2 / kappa ** 2 * rho ** 2 * theta * (1 + np.exp(-kappa)) + 3 * sigma ** 2 / kappa ** 2 * theta + 2 * theta ** 2
@@ -1255,13 +1303,16 @@ class HestonModel(PolynomialModel):
             N33 = 1 / kappa**3 * (9 * sigma**2 * theta * (1 + 4 * rho**2) + 4 * kappa**2 * theta**2) * (np.exp(-kappa) - 1) + 1 / kappa**3 * (2 * kappa * theta**2 + 3 / 2 * sigma**2 * theta) * (np.exp(-kappa) - 1)**2 + 6 * sigma**2 / kappa**2 * theta * (1 + 4 * rho**2 + kappa * rho**2) * np.exp(-kappa) + 3 * sigma**2 / kappa**2 * theta * (1 + 4 * rho**2) + 2 * theta**2
             return np.array([N11, N12, N13, N12, N22, N23, N13, N23, N33])
 
-    def generate_observations(self, t_max, dt, v0, seed=None, verbose=0):
+    def generate_observations(self, t_max, dt, seed=None, verbose=0):
         if seed is not None:
             np.random.seed(seed)
             self.seed = seed
 
         if np.isnan(self.true_param).any():
             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
+
+        v0, Y_disc_0, Y_disc2_0 = self.init.sample(param=self.true_param, n=1)
+
         kappa, theta, sigma, rho = self.true_param
         S0 = 0
 
@@ -1281,7 +1332,7 @@ class HestonModel(PolynomialModel):
                 S.append(S0)
                 v.append(v0)
 
-        Y_disc = np.append(0, np.diff(S))
+        Y_disc = np.append(Y_disc_0, np.diff(S))
         Y_disc2 = Y_disc ** 2
 
         observations = np.vstack((v, Y_disc, Y_disc2)).T
@@ -1323,26 +1374,8 @@ class HestonModel(PolynomialModel):
 
         self.seed = str(self.seed) + '+' + str(seed) if self.seed is not None else str(seed)
         t_max = observations.shape[0] - 1
-        np.savetxt('HestonModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, t_max), observations)
+        np.savetxt('./saves/HestonModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, t_max), observations)
         self.observations = observations
-
-    @classmethod
-    def from_observations(cls, first_observed, E_0, Cov_0, obs, true_param=None, wrt=None, seed=0):
-        if isinstance(obs, str):
-            filename = './saves/HestonModel/Observations/' + obs
-        else:
-            kappa, theta, sigma, rho = true_param
-            filename = './saves/HestonModel/Observations/observations_{:.3f}_{:.3f}_{:.3f}_{:.3f}_seed{}_{}obs.txt'.format(kappa, theta_vol, sig, rho, seed, obs)
-        obj = cls(first_observed=first_observed, E_0=E_0, Cov_0=Cov_0, true_param=true_param, wrt=wrt)
-
-        if os.path.exists(filename):
-            observations = np.loadtxt(filename)
-            obj.observations = observations
-        else:
-            obj.generate_observations(t_max=obs, seed=seed, verbose=1)
-
-        obj.seed = seed
-        return obj
 
 
 class OUNIGModel(PolynomialModel):
@@ -1355,7 +1388,6 @@ class OUNIGModel(PolynomialModel):
         self.params_names = np.array(['lambda', 'kappa', 'gamma'])
         self.params_bounds = np.array([[0.001, 10.001], [0.0001, 10], [0.0001, 10]])
         self.savestring = '{}_{}_{}_{}'.format(lamb, kappa, alpha, delta)
-        self.model_name = 'OUNIGModel'
         self.observations = None
         self.seed = None
 
@@ -2052,57 +2084,41 @@ class FilteredOUNIGModel(PolynomialModel):
         return V, Std, Corr
 
 
-## Test the new restructuring #1
-def E_0(param, order=0, wrt=np.array([0, 1, 2, 3])):
-    wrt = np.atleast_1d(wrt)
-    kappa, theta, sigma, rho = param
-    if order == 0:
-        return np.array([0.3**2, 0, 0])
-    elif order == 1:
-        deriv_array = np.zeros((4, 3))
-        return deriv_array[wrt]
-    elif order == 2:
-        deriv_array = np.zeros((4, 4, 3))
-        deriv_array = deriv_array[np.ix_(wrt, wrt)]
-        return deriv_array[np.triu_indices(len(wrt))]
+## Test the new restructuring #1 (Simulation study, no observations needed)
+init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
 
-def Cov_0(param, order=0, wrt=np.array([0, 1, 2, 3])):
-    wrt = np.atleast_1d(wrt)
-    kappa, theta, sigma, rho = param
-    if order == 0:
-        return np.eye(3)
-    elif order == 1:
-        deriv_array = np.zeros((4, 3, 3))
-        return deriv_array[wrt]
-    elif order == 2:
-        deriv_array = np.zeros((4, 4, 3, 3))
-        deriv_array = deriv_array[np.ix_(wrt, wrt)]
-        return deriv_array[np.triu_indices(len(wrt))]
+# heston = HestonModel(first_observed=1, init=init, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
+# V, Std, Corr = heston.compute_V()
 
-tic = time()
-heston = HestonModel(first_observed=1, E_0=E_0, Cov_0=Cov_0, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=np.array([0, 1, 2, 3]))
+
+## Test the new restructuring #2 (Simulation study with observations)
+heston = HestonModel.from_observations(first_observed=1, init=init, obs=200000, dt=1/250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=5)
+# result = heston.fit_qml(fit_parameter=2, initial=0.3, t=10000)
+result = heston.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
+
+
+## Test the new restructuring #3 (Semi-Real-world scenario)
+heston = HestonModel.from_observations(first_observed=1, init=init, obs='observations_1.000_0.160_0.300_-0.500_seed5_200000obs.txt', dt=1/250, true_param=np.array([1, 0.4**2, np.nan, -0.5]), wrt=2)
+result = heston.fit_qml(fit_parameter=2, initial=0.3, t=1000)
+result = heston.fit_qml(fit_parameter=2, initial=0.3, t=10000, update_estimate=True)
+heston.setup_filter(wrt=2)
 V, Std, Corr = heston.compute_V()
-toc = time()
-print(toc - tic)
-
-tic = time()
-heston = HestonModel(first_observed=1, E_0=E_0, Cov_0=Cov_0, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=np.array([1, 2, 3]))
-V, Std, Corr = heston.compute_V()
-toc = time()
-print(toc - tic)
 
 
-## Test the new restructuring #2
+## Test the new restructuring #3 (Real-world scenario)
+heston = HestonModel.from_observations(first_observed=1, init=init, obs='observations_1.000_0.160_0.300_-0.500_seed5_200000obs.txt')
+seq = heston.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=200)
+res = heston.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
 
 ## Heston wrt = 2 --> 82.97s
 ## Heston wrt = [2, 3] --> 909.72s
 ## Heston wrt = [1, 2, 3] --> 7555.98s
 ## Heston wrt = [0, 1, 2, 3] --> 58115.90s
-# tic = time()
-# hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=3)
-# V, Std, Corr = hestonf.calculate_V()
-# toc = time()
-# print(toc - tic)
+tic = time()
+hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=3)
+V, Std, Corr = hestonf.calculate_V()
+toc = time()
+print(toc - tic)
 #
 #
 # model = OUNIGModel.from_observations(first_observed=1, lamb=1, kappa=0.5, alpha=2, delta=3, x=[0.5, 1], obs=200000, seed=21)
