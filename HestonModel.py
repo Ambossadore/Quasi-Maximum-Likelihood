@@ -2096,8 +2096,8 @@ print(toc - tic)
 
 ## Heston wrt = 2 --> 82.97s
 ## Heston wrt = [2, 3] --> 909.72s
-## Heston wrt = [1, 2, 3] --> 7672.88s
-## Heston wrt = [0, 1, 2, 3] --> 59413.14s
+## Heston wrt = [1, 2, 3] --> 7555.98s
+## Heston wrt = [0, 1, 2, 3] --> 58115.90s
 # tic = time()
 # hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=3)
 # V, Std, Corr = hestonf.calculate_V()
