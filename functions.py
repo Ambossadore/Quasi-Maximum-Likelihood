@@ -154,32 +154,70 @@ class InitialDistribution:
         self.hyper = np.array(hyper) if hyper is not None else None
 
     def E_0(self, param=None, order=0, wrt=None):
+        wrt = np.atleast_1d(wrt)
         if self.dist == 'Dirac':
-            wrt = np.atleast_1d(wrt)
             if order == 0:
                 return self.hyper
             elif order == 1:
-                deriv_array = np.zeros((np.size(self.params), np.size(self.hyper)))
+                deriv_array = np.zeros((np.size(param), np.size(self.hyper)))
                 return deriv_array[wrt]
             elif order == 2:
-                deriv_array = np.zeros((np.size(self.params), np.size(self.params), np.size(self.hyper)))
+                deriv_array = np.zeros((np.size(param), np.size(param), np.size(self.hyper)))
+                deriv_array = deriv_array[np.ix_(wrt, wrt)]
+                return deriv_array[np.triu_indices(len(wrt))]
+        elif self.dist == 'Gamma_Dirac':
+            kappa, theta, sigma, rho = param
+            if order == 0:
+                return np.append(theta, self.hyper)
+            elif order == 1:
+                deriv_array = np.zeros((4, 3))
+                deriv_array[1, 0] = 1
+                return deriv_array[wrt]
+            elif order == 2:
+                deriv_array = np.zeros((4, 4, 3))
                 deriv_array = deriv_array[np.ix_(wrt, wrt)]
                 return deriv_array[np.triu_indices(len(wrt))]
 
     def Cov_0(self, param=None, order=0, wrt=None):
+        wrt = np.atleast_1d(wrt)
         if self.dist == 'Dirac':
-            wrt = np.atleast_1d(wrt)
             if order == 0:
                 return np.zeros((np.size(self.hyper), np.size(self.hyper)))
             elif order == 1:
-                deriv_array = np.zeros((np.size(self.params), np.size(self.hyper), np.size(self.hyper)))
+                deriv_array = np.zeros((np.size(param), np.size(self.hyper), np.size(self.hyper)))
                 return deriv_array[wrt]
             elif order == 2:
-                deriv_array = np.zeros((np.size(self.params), np.size(self.params), np.size(self.hyper), np.size(self.hyper)))
+                deriv_array = np.zeros((np.size(param), np.size(param), np.size(self.hyper), np.size(self.hyper)))
+                deriv_array = deriv_array[np.ix_(wrt, wrt)]
+                return deriv_array[np.triu_indices(len(wrt))]
+        elif self.dist == 'Gamma_Dirac':
+            kappa, theta, sigma, rho = param
+            if order == 0:
+                arr = np.zeros((3, 3))
+                arr[0, 0] = theta * sigma**2 / (2 * kappa)
+                return arr
+            elif order == 1:
+                deriv_array = np.zeros((4, 3, 3))
+                deriv_array[0, 0, 0] = -theta * sigma**2 / (2 * kappa**2)
+                deriv_array[1, 0, 0] = sigma**2 / (2 * kappa)
+                deriv_array[2, 0, 0] = theta * sigma / kappa
+                return deriv_array[wrt]
+            elif order == 2:
+                deriv_array = np.zeros((4, 4, 3, 3))
+                deriv_array[0, 0, 0, 0] = theta * sigma**2 / kappa**3
+                deriv_array[0, 1, 0, 0] = -sigma**2 / (2 * kappa**2)
+                deriv_array[0, 2, 0, 0] = -theta * sigma**2 / kappa**2
+                deriv_array[1, 2, 0, 0] = sigma / kappa
+                deriv_array[2, 2, 0, 0] = theta / kappa
                 deriv_array = deriv_array[np.ix_(wrt, wrt)]
                 return deriv_array[np.triu_indices(len(wrt))]
 
     def sample(self, param=None, n=1):
         if self.dist == 'Dirac':
             sample = np.tile(self.hyper, (n, 1))
+            return sample.squeeze()
+        elif self.dist == 'Gamma_Dirac':
+            kappa, theta, sigma, rho = param
+            v = np.random.gamma(shape=2 * kappa * theta / sigma**2, scale=sigma**2 / (2 * kappa), size=(n, 1))
+            sample = np.hstack((v, np.tile(self.hyper, (n, 1))))
             return sample.squeeze()
