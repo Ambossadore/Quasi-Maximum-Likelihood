@@ -1084,6 +1084,7 @@ class HestonModel(PolynomialModel):
 
         super().__init__(first_observed, init, true_param)
         self.dim = 3
+        self.dt = dt
         self.params_names = np.array(['kappa', 'theta', 'sigma', 'rho'])
         self.params_bounds = np.array([[0.0001, 10], [0.0001 ** 2, 1], [0.0001, 1], [-1, 1]])
 
@@ -1094,12 +1095,11 @@ class HestonModel(PolynomialModel):
         elif wrt is not None:
             warnings.warn('Argument wrt was not used since the whole parameter has not yet been estimated. Please use method "setup_filter" after this has been done.', Warning)
 
-    @staticmethod
-    def a(param, order=0, wrt=np.array([0, 1, 2, 3])):
+    def a(self, param, order=0, wrt=np.array([0, 1, 2, 3])):
         wrt = np.atleast_1d(wrt)
         kappa, theta, sigma, rho = param
         if order == 0:
-            return np.array([theta * (1 - np.exp(-kappa)), 0, theta + theta / kappa * (np.exp(-kappa) - 1)])
+            return np.array([theta * (1 - np.exp(-kappa * self.dt)), 0, theta * self.dt + theta / kappa * (np.exp(-kappa * self.dt) - 1)])
         elif order == 1:
             deriv_array = np.zeros((4, 3))
             deriv_array[0] = [theta * np.exp(-kappa), 0, theta / kappa ** 2 * (1 - np.exp(-kappa)) - theta / kappa * np.exp(-kappa)]
@@ -1112,12 +1112,11 @@ class HestonModel(PolynomialModel):
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    @staticmethod
-    def A(param, order=0, wrt=np.array([0, 1, 2, 3])):
+    def A(self, param, order=0, wrt=np.array([0, 1, 2, 3])):
         wrt = np.atleast_1d(wrt)
         kappa, theta, sigma, rho = param
         if order == 0:
-            return np.array([[np.exp(-kappa), 0, 0], [0, 0, 0], [1 / kappa * (1 - np.exp(-kappa)), 0, 0]])
+            return np.array([[np.exp(-kappa * self.dt), 0, 0], [0, 0, 0], [1 / kappa * (1 - np.exp(-kappa * self.dt)), 0, 0]])
         elif order == 1:
             deriv_array = np.zeros((4, 3, 3))
             deriv_array[0, :, 0] = [-np.exp(-kappa), 0, 1 / kappa**2 * (np.exp(-kappa) - 1) + 1 / kappa * np.exp(-kappa)]
@@ -1128,8 +1127,7 @@ class HestonModel(PolynomialModel):
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    @staticmethod
-    def B(param, order):
+    def B(self, param, order):
         kappa, theta, sigma, rho = param
         mu, delta = 0, 0
         dicts = return_dict(2, 2 * order)
@@ -1151,7 +1149,7 @@ class HestonModel(PolynomialModel):
                 mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
                 heston_Bc[i, j] = (multi_binom(dicts[i], dicts[masks]) * heston_A[mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum()
 
-        heston_B = expm(heston_Bc)
+        heston_B = expm(heston_Bc * self.dt)
         heston_B_diff = np.zeros(heston_B.shape)
         heston_B_diff[:, dicts[:, 1] == 0] = heston_B[:, dicts[:, 1] == 0]
 
@@ -1170,8 +1168,8 @@ class HestonModel(PolynomialModel):
         kappa, theta, sigma, rho = param
         v0 = self.init.E_0(param)[0]
         v0_2 = self.init.Cov_0(param)[0, 0] + v0**2
-        B11 = (1 - np.exp(-kappa)) * sigma ** 2 / kappa * ((1 - np.exp(-kappa * t)) * theta + np.exp(-kappa * t) * v0 - (1 - np.exp(-kappa)) * theta / 2)
-        B13 = sigma ** 2 / (2 * kappa ** 2) * ((1 + 4 * rho ** 2 - np.exp(-kappa)) * theta - 2 * (v0 - theta) * np.exp(-kappa * t)) * (1 - np.exp(-kappa)) + 1 / kappa * (sigma ** 2 * (1 + kappa * rho ** 2) * (v0 - theta) * np.exp(-kappa * t) - 2 * rho ** 2 * sigma ** 2 * theta * np.exp(-kappa))
+        B11 = (1 - np.exp(-kappa * self.dt)) * sigma ** 2 / kappa * ((1 - np.exp(-kappa * t)) * theta + np.exp(-kappa * t) * v0 - (1 - np.exp(-kappa * self.dt)) * theta / 2)
+        B13 = sigma ** 2 / (2 * kappa ** 2) * ((1 + 4 * rho ** 2 - np.exp(-kappa * self.dt)) * theta - 2 * (v0 - theta) * np.exp(-kappa * t)) * (1 - np.exp(-kappa * self.dt)) + 1 / kappa * (sigma ** 2 * (1 + kappa * rho ** 2 * self.dt) * (v0 - theta) * self.dt * np.exp(-kappa * t) - 2 * rho ** 2 * sigma ** 2 * theta * self.dt * np.exp(-kappa * self.dt))
         B33 = ((2 / kappa ** 2 * (v0_2 - 2 * theta * v0 + theta**2) - sigma ** 2 / kappa ** 3 * (2 * v0 - theta)) * np.exp(-2 * kappa * (t - 1)) - sigma ** 2 / kappa ** 3 * (v0 - theta) * np.exp(-kappa * (t - 1)) - sigma ** 2 / (2 * kappa ** 3) * theta) * (1 - np.exp(-kappa)) ** 2 + 2 / kappa ** 3 * (3 * sigma ** 2 * (1 + 2 * rho ** 2) + 2 * kappa ** 2 * theta) * (v0 - theta) * np.exp(-kappa * t) * (np.exp(kappa) - 1) - 6 * sigma ** 2 / kappa ** 2 * (1 + 2 * rho ** 2 + kappa * rho ** 2) * (v0 - theta) * np.exp(-kappa * t) - 3 * sigma ** 2 / kappa ** 3 * theta * (1 + 8 * rho ** 2) * (1 - np.exp(-kappa)) + 12 * sigma ** 2 / kappa ** 2 * rho ** 2 * theta * (1 + np.exp(-kappa)) + 3 * sigma ** 2 / kappa ** 2 * theta + 2 * theta ** 2
         B22 = theta + 1 / kappa * (v0 - theta) * np.exp(-kappa * t) * (np.exp(kappa) - 1)
         B12 = theta / kappa * rho * sigma * (1 - np.exp(-kappa)) + rho * sigma * (v0 - theta) * np.exp(-kappa * t)
