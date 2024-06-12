@@ -1380,13 +1380,12 @@ class HestonModel(PolynomialModel):
 
 
 class OUNIGModel(PolynomialModel):
-    def __init__(self, first_observed, init, alpha, true_param=None, wrt=None):
+    def __init__(self, first_observed, init, true_param=None, wrt=None):
         if true_param is None:
             true_param = np.repeat(np.nan, 3)
 
         super().__init__(first_observed, init, true_param)
         self.dim = 2
-        self.alpha = alpha
         self.params_names = np.array(['lambda', 'kappa', 'delta'])
         self.params_bounds = np.array([[0.001, 10.001], [0.0001, 10], [0.0001, 10]])
 
@@ -1434,20 +1433,22 @@ class OUNIGModel(PolynomialModel):
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    def B(self, param, order):
+    @staticmethod
+    def B(param, order):
         lamb, kappa, delta = param
         dicts = return_dict(2, order)
+        alpha = 1
 
         OU_A = np.zeros((n_dim(2, order), n_dim(2, order)))
         OU_A[mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -lamb
         OU_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = kappa
         OU_A[mult_to_ind([0, 1], dicts), mult_to_ind([0, 1], dicts)] = -kappa
 
-        OU_A[mult_to_ind([2, 2], dicts), 0] = delta / self.alpha ** 3
-        OU_A[mult_to_ind([2, 0], dicts), 0] = delta / self.alpha
-        OU_A[mult_to_ind([0, 2], dicts), 0] = delta / self.alpha
-        OU_A[mult_to_ind([4, 0], dicts), 0] = 3 * delta / self.alpha ** 3
-        OU_A[mult_to_ind([0, 4], dicts), 0] = 3 * delta / self.alpha ** 3
+        OU_A[mult_to_ind([2, 2], dicts), 0] = delta / alpha ** 3
+        OU_A[mult_to_ind([2, 0], dicts), 0] = delta / alpha
+        OU_A[mult_to_ind([0, 2], dicts), 0] = delta / alpha
+        OU_A[mult_to_ind([4, 0], dicts), 0] = 3 * delta / alpha ** 3
+        OU_A[mult_to_ind([0, 4], dicts), 0] = 3 * delta / alpha ** 3
 
         OU_Bc = np.zeros(OU_A.shape)
         for i in range(OU_A.shape[0]):
@@ -1462,40 +1463,43 @@ class OUNIGModel(PolynomialModel):
 
     def C(self, param, t):
         lamb, kappa, delta = param
+        alpha = 1
         psi = (np.exp(-kappa) - np.exp(-lamb)) / (lamb - kappa) + np.exp(-kappa) / (lamb + kappa)
         B11 = 1 - np.exp(-2 * lamb)
         B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb) * psi
         B22 = np.exp(-2 * kappa) * (kappa / (lamb + kappa))**2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa**2 * psi**2
-        return (delta / self.alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
+        return (delta / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
 
-    def C_lim(self, param, order=0, wrt=np.array([0, 1, 2])):
+    @staticmethod
+    def C_lim(param, order=0, wrt=np.array([0, 1, 2])):
         wrt = np.atleast_1d(wrt)
         lamb, kappa, delta = param
+        alpha = 1
         psi = (np.exp(-kappa) - np.exp(-lamb)) / (lamb - kappa) + np.exp(-kappa) / (lamb + kappa)
         if order == 0:
             B11 = 1 - np.exp(-2 * lamb)
             B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb) * psi
             B22 = np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2
-            return (delta / self.alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
+            return (delta / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
         elif order == 1:
             psi_l = np.exp(-lamb) / (lamb - kappa) + (np.exp(-lamb) - np.exp(-kappa)) / (lamb - kappa) ** 2 - np.exp(-kappa) / (lamb + kappa) ** 2
             psi_k = (np.exp(-kappa) - np.exp(-lamb)) / (lamb - kappa) ** 2 - 2 * np.exp(-kappa) * lamb / (lamb ** 2 - kappa ** 2) - np.exp(-kappa) / (lamb + kappa) ** 2
 
             deriv_array = np.zeros((3, 2, 2))
-            B11 = (delta / self.alpha) / lamb * np.exp(-2 * lamb) - (delta / self.alpha) / (2 * lamb ** 2) * (1 - np.exp(-2 * lamb))
-            B12 = (delta / self.alpha) / (2 * lamb ** 2) * (kappa * np.exp(-lamb) * psi - kappa / (lamb + kappa)) + (delta / self.alpha) / (2 * lamb) * (kappa * np.exp(-lamb) * (psi - psi_l) - kappa / (lamb + kappa) ** 2)
-            B22 = (delta / self.alpha) / (2 * lamb) * ((1 - np.exp(-2 * kappa)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) - (delta / self.alpha) / (2 * lamb ** 2) * (np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
+            B11 = (delta / alpha) / lamb * np.exp(-2 * lamb) - (delta / alpha) / (2 * lamb ** 2) * (1 - np.exp(-2 * lamb))
+            B12 = (delta / alpha) / (2 * lamb ** 2) * (kappa * np.exp(-lamb) * psi - kappa / (lamb + kappa)) + (delta / alpha) / (2 * lamb) * (kappa * np.exp(-lamb) * (psi - psi_l) - kappa / (lamb + kappa) ** 2)
+            B22 = (delta / alpha) / (2 * lamb) * ((1 - np.exp(-2 * kappa)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) - (delta / alpha) / (2 * lamb ** 2) * (np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
             deriv_array[0] = np.array([[B11, B12], [B12, B22]])
 
             B11 = 0
-            B12 = (delta / self.alpha) / (2 * lamb) * (lamb / (lamb + kappa) ** 2 - np.exp(-lamb) * psi - kappa * np.exp(-lamb) * psi_k)
-            B22 = (delta / self.alpha) / lamb * (np.exp(-2 * kappa) * (lamb * kappa / (lamb + kappa) ** 3 - kappa ** 2 / (lamb + kappa) ** 2 + kappa / (lamb + kappa) + lamb / kappa) + (1 - np.exp(-2 * kappa)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
+            B12 = (delta / alpha) / (2 * lamb) * (lamb / (lamb + kappa) ** 2 - np.exp(-lamb) * psi - kappa * np.exp(-lamb) * psi_k)
+            B22 = (delta / alpha) / lamb * (np.exp(-2 * kappa) * (lamb * kappa / (lamb + kappa) ** 3 - kappa ** 2 / (lamb + kappa) ** 2 + kappa / (lamb + kappa) + lamb / kappa) + (1 - np.exp(-2 * kappa)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
             deriv_array[1] = np.array([[B11, B12], [B12, B22]])
 
             B11 = 1 - np.exp(-2 * lamb)
             B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb) * psi
             B22 = np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2
-            deriv_array[2] = 1 / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
+            deriv_array[2] = (1 / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
 
             return deriv_array[wrt]
         elif order == 2:
@@ -1507,36 +1511,38 @@ class OUNIGModel(PolynomialModel):
 
             deriv_array = np.zeros((3, 3, 2, 2))
 
-            B11 = (delta / self.alpha) / lamb ** 3 * (1 - np.exp(-2 * lamb)) - 2 * (delta / self.alpha) / lamb ** 2 * (1 + lamb) * np.exp(-2 * lamb)
-            B12 = -(delta / self.alpha) / lamb ** 3 * (kappa * np.exp(-lamb) * psi - kappa / (lamb + kappa)) + (delta / self.alpha) / lamb ** 2 * (kappa * np.exp(-lamb) * (psi_l - psi) + kappa / (lamb + kappa) ** 2) + (delta / self.alpha) / (2 * lamb) * (2 * kappa / (lamb + kappa) ** 3 - kappa * np.exp(-lamb) * (psi - 2 * psi_l + psi_ll))
-            B22 = (delta / self.alpha) / lamb * ((1 - np.exp(-2 * kappa)) * kappa / (lamb + kappa) ** 3 + 3 * np.exp(-2 * kappa) * kappa ** 2 / (lamb + kappa) ** 4 - kappa ** 2 * psi_l ** 2 - kappa ** 2 * psi * psi_ll) - (delta / self.alpha) / lamb ** 2 * ((1 - np.exp(-2 * kappa)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) + (delta / self.alpha) / lamb ** 3 * (np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
+            B11 = (delta / alpha) / lamb ** 3 * (1 - np.exp(-2 * lamb)) - 2 * (delta / alpha) / lamb ** 2 * (1 + lamb) * np.exp(-2 * lamb)
+            B12 = -(delta / alpha) / lamb ** 3 * (kappa * np.exp(-lamb) * psi - kappa / (lamb + kappa)) + (delta / alpha) / lamb ** 2 * (kappa * np.exp(-lamb) * (psi_l - psi) + kappa / (lamb + kappa) ** 2) + (delta / alpha) / (2 * lamb) * (2 * kappa / (lamb + kappa) ** 3 - kappa * np.exp(-lamb) * (psi - 2 * psi_l + psi_ll))
+            B22 = (delta / alpha) / lamb * ((1 - np.exp(-2 * kappa)) * kappa / (lamb + kappa) ** 3 + 3 * np.exp(-2 * kappa) * kappa ** 2 / (lamb + kappa) ** 4 - kappa ** 2 * psi_l ** 2 - kappa ** 2 * psi * psi_ll) - (delta / alpha) / lamb ** 2 * ((1 - np.exp(-2 * kappa)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) + (delta / alpha) / lamb ** 3 * (np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
             deriv_array[0, 0] = np.array([[B11, B12], [B12, B22]])
 
             B11 = 0
-            B12 = (delta / self.alpha) / (2 * lamb ** 2) * (np.exp(-lamb) * psi + kappa * np.exp(-lamb) * psi_k - lamb / (lamb + kappa) ** 2) + (delta / self.alpha) / (2 * lamb) * (np.exp(-lamb) * (psi - psi_l) + kappa * np.exp(-lamb) * (psi_k - psi_lk) - (lamb - kappa) / (lamb + kappa) ** 3)
-            B22 = (delta / self.alpha) / lamb * (np.exp(-2 * kappa) * (kappa * (kappa - 2 * lamb) / (lamb + kappa) ** 4 + 2 * kappa ** 2 / (lamb + kappa) ** 3 - kappa / (lamb + kappa) ** 2 + 1 / kappa) + (1 - np.exp(-2 * kappa)) * ((kappa - lamb) / (2 * (lamb + kappa) ** 3) - 1 / (2 * kappa ** 2)) - 2 * kappa * psi * psi_l - kappa ** 2 * psi_l * psi_k - kappa ** 2 * psi * psi_lk) - (delta / self.alpha) / lamb ** 2 * (np.exp(-2 * kappa) * (lamb * kappa / (lamb + kappa) ** 3 - kappa ** 2 / (lamb + kappa) ** 2 + kappa / (lamb + kappa) + lamb / kappa) + (1 - np.exp(-2 * kappa)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
+            B12 = (delta / alpha) / (2 * lamb ** 2) * (np.exp(-lamb) * psi + kappa * np.exp(-lamb) * psi_k - lamb / (lamb + kappa) ** 2) + (delta / alpha) / (2 * lamb) * (np.exp(-lamb) * (psi - psi_l) + kappa * np.exp(-lamb) * (psi_k - psi_lk) - (lamb - kappa) / (lamb + kappa) ** 3)
+            B22 = (delta / alpha) / lamb * (np.exp(-2 * kappa) * (kappa * (kappa - 2 * lamb) / (lamb + kappa) ** 4 + 2 * kappa ** 2 / (lamb + kappa) ** 3 - kappa / (lamb + kappa) ** 2 + 1 / kappa) + (1 - np.exp(-2 * kappa)) * ((kappa - lamb) / (2 * (lamb + kappa) ** 3) - 1 / (2 * kappa ** 2)) - 2 * kappa * psi * psi_l - kappa ** 2 * psi_l * psi_k - kappa ** 2 * psi * psi_lk) - (delta / alpha) / lamb ** 2 * (np.exp(-2 * kappa) * (lamb * kappa / (lamb + kappa) ** 3 - kappa ** 2 / (lamb + kappa) ** 2 + kappa / (lamb + kappa) + lamb / kappa) + (1 - np.exp(-2 * kappa)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
             deriv_array[0, 1] = np.array([[B11, B12], [B12, B22]])
 
-            B11 = 1 / lamb * np.exp(-2 * lamb) - 1 / (2 * lamb ** 2) * (1 - np.exp(-2 * lamb))
-            B12 = 1 / (2 * lamb ** 2) * (kappa * np.exp(-lamb) * psi - kappa / (lamb + kappa)) + 1 / (2 * lamb) * (kappa * np.exp(-lamb) * (psi - psi_l) - kappa / (lamb + kappa) ** 2)
-            B22 = 1 / (2 * lamb) * ((1 - np.exp(-2 * kappa)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) - 1 / (2 * lamb ** 2) * (np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
+            B11 = (1 / alpha) / lamb * np.exp(-2 * lamb) - (1 / alpha) / (2 * lamb ** 2) * (1 - np.exp(-2 * lamb))
+            B12 = (1 / alpha) / (2 * lamb ** 2) * (kappa * np.exp(-lamb) * psi - kappa / (lamb + kappa)) + (1 / alpha) / (2 * lamb) * (kappa * np.exp(-lamb) * (psi - psi_l) - kappa / (lamb + kappa) ** 2)
+            B22 = (1 / alpha) / (2 * lamb) * ((1 - np.exp(-2 * kappa)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) - (1 / alpha) / (2 * lamb ** 2) * (np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
             deriv_array[0, 2] = np.array([[B11, B12], [B12, B22]])
 
             B11 = 0
-            B12 = - (delta / self.alpha) / (2 * lamb) * (2 * lamb / (lamb + kappa) ** 3 + 2 * np.exp(-lamb) * psi_k + kappa * np.exp(-lamb) * psi_kk)
-            B22 = (delta / self.alpha) / lamb * (np.exp(-2 * kappa) * (2 * (kappa ** 2 + lamb) / (lamb + kappa) ** 2 - 4 * kappa * lamb / (lamb + kappa) ** 3 + lamb * (lamb - 2 * kappa) / (lamb + kappa) ** 4 - 2 * kappa / (lamb + kappa) - 2 * lamb / kappa ** 2 * (1 + kappa)) + (1 - np.exp(-2 * kappa)) * lamb * (1 / kappa ** 3 - 1 / (lamb + kappa) ** 3) - psi ** 2 - 4 * kappa * psi * psi_k - kappa ** 2 * psi_k ** 2 - kappa ** 2 * psi * psi_kk)
+            B12 = - (delta / alpha) / (2 * lamb) * (2 * lamb / (lamb + kappa) ** 3 + 2 * np.exp(-lamb) * psi_k + kappa * np.exp(-lamb) * psi_kk)
+            B22 = (delta / alpha) / lamb * (np.exp(-2 * kappa) * (2 * (kappa ** 2 + lamb) / (lamb + kappa) ** 2 - 4 * kappa * lamb / (lamb + kappa) ** 3 + lamb * (lamb - 2 * kappa) / (lamb + kappa) ** 4 - 2 * kappa / (lamb + kappa) - 2 * lamb / kappa ** 2 * (1 + kappa)) + (1 - np.exp(-2 * kappa)) * lamb * (1 / kappa ** 3 - 1 / (lamb + kappa) ** 3) - psi ** 2 - 4 * kappa * psi * psi_k - kappa ** 2 * psi_k ** 2 - kappa ** 2 * psi * psi_kk)
             deriv_array[1, 1] = np.array([[B11, B12], [B12, B22]])
 
             B11 = 0
-            B12 = 1 / (2 * lamb) * (lamb / (lamb + kappa) ** 2 - np.exp(-lamb) * psi - kappa * np.exp(-lamb) * psi_k)
-            B22 = 1 / lamb * (np.exp(-2 * kappa) * (lamb * kappa / (lamb + kappa) ** 3 - kappa ** 2 / (lamb + kappa) ** 2 + kappa / (lamb + kappa) + lamb / kappa) + (1 - np.exp(-2 * kappa)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
+            B12 = (1 / alpha) / (2 * lamb) * (lamb / (lamb + kappa) ** 2 - np.exp(-lamb) * psi - kappa * np.exp(-lamb) * psi_k)
+            B22 = (1 / alpha) / lamb * (np.exp(-2 * kappa) * (lamb * kappa / (lamb + kappa) ** 3 - kappa ** 2 / (lamb + kappa) ** 2 + kappa / (lamb + kappa) + lamb / kappa) + (1 - np.exp(-2 * kappa)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
             deriv_array[1, 2] = np.array([[B11, B12], [B12, B22]])
 
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    def Q(self, param, num):
+    @staticmethod
+    def Q(param, num):
         lamb, kappa, delta = param
+        alpha = 1
         if num == 2:
             return np.zeros((4, 4))
         elif num == 1:
@@ -1546,7 +1552,7 @@ class OUNIGModel(PolynomialModel):
             B11 = 1 - np.exp(-2 * lamb)
             B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb) * psi
             B22 = np.exp(-2 * kappa) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2
-            return (delta / self.alpha) / (2 * lamb) * np.array([B11, B12, B12, B22])
+            return (delta / alpha) / (2 * lamb) * np.array([B11, B12, B12, B22])
 
     def generate_observations(self, t_max, dt, seed=None, verbose=0):
         if seed is not None:
@@ -1561,10 +1567,11 @@ class OUNIGModel(PolynomialModel):
         else:
             x = self.init.sample(param=self.true_param, n=1)
         lamb, kappa, delta = self.true_param
+        alpha = 1
 
         steps = int(np.ceil(t_max / dt)) + 1
         W = np.random.standard_normal(size=(steps - 1, self.dim))
-        dIG = invgauss_bn(xi=delta * dt, eta=self.alpha, size=steps - 1, seed=seed)
+        dIG = invgauss_bn(xi=delta * dt, eta=alpha, size=steps - 1, seed=seed)
         dNIG = np.sqrt(dIG)[:, None] * W
 
         expQ = np.array([[np.exp(-lamb * dt), 0], [kappa * (np.exp(-kappa * dt) - np.exp(-lamb * dt)) / (lamb - kappa), np.exp(-kappa * dt)]])
@@ -1598,8 +1605,7 @@ init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 heston = HestonModel(first_observed=1, init=init, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
 V, Std, Corr = heston.compute_V()
 
-ou1 = OUNIGModel(first_observed=1, init=init, alpha=1, true_param=np.array([1, 0.5, 1.5]), wrt=2)
-ou2 = OUNIGModel(first_observed=1, init=init, alpha=2, true_param=np.array([1, 0.5, 3]), wrt=2)
+ou = OUNIGModel(first_observed=1, init=init, true_param=np.array([1, 0.5, 1.5]), wrt=2)
 V, Std, Corr = ou.compute_V()
 
 ## Test the new restructuring #2 (Simulation study with observations)
