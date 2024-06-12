@@ -1078,7 +1078,7 @@ class PolynomialModel:
 
 
 class HestonModel(PolynomialModel):
-    def __init__(self, first_observed, init, true_param=None, wrt=None):
+    def __init__(self, first_observed, init, dt, true_param=None, wrt=None):
         if true_param is None:
             true_param = np.repeat(np.nan, 4)
 
@@ -1605,7 +1605,7 @@ init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 heston = HestonModel(first_observed=1, init=init, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
 V, Std, Corr = heston.compute_V()
 
-ou = OUNIGModel(first_observed=1, init=init, true_param=np.array([1, 0.5, 1.5]), wrt=2)
+ou = OUNIGModel(first_observed=1, init=init, true_param=np.array([1, 0.5, 1.5]), wrt=1)
 V, Std, Corr = ou.compute_V()
 
 ## Test the new restructuring #2 (Simulation study with observations)
@@ -1614,6 +1614,13 @@ result = heston.fit_qml(fit_parameter=2, initial=0.3, t=10000)
 result = heston.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
 V, Std, Corr = heston.compute_V(kind='estimate', wrt=2, verbose=1)
 U = heston.compute_U(kind='estimate', wrt=2, verbose=1)
+
+ou = OUNIGModel.from_observations(first_observed=1, init=init, obs=200000, dt=1/250, true_param=np.array([1, 0.5, 1.5]), seed=5)
+fits = []
+for i in range(10):
+    ou = OUNIGModel.from_observations(first_observed=1, init=init, obs=10000, dt=1 / 250, true_param=np.array([1, 0.5, 1.5]), seed=i)
+    fits.append(ou.fit_qml(fit_parameter=1, initial=0.5, t=10000))
+V, Std, Corr = ou.compute_V(kind='estimate', wrt=1, verbose=1)
 
 
 ## Test the new restructuring #3 (Semi-Real-world scenario)
@@ -1639,252 +1646,12 @@ hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3,
 V, Std, Corr = hestonf.calculate_V()
 toc = time()
 print(toc - tic)
-#
-#
-# model = OUNIGModel.from_observations(first_observed=1, lamb=1, kappa=0.5, alpha=2, delta=3, x=[0.5, 1], obs=200000, seed=21)
-# # U = model.compute_U(model.true_param, wrt=0, verbose=1, save_raw=True)
-# W = model.compute_W(model.true_param, wrt=0, verbose=1, save_raw=True)
-#
-# ## Formula checkup for a, A, C
-# hest = HestonModel(first_observed=1, kappa=1.3, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.2 ** 2)
-# hest = OUNIGModel(first_observed=1, lamb=1, kappa=0.5, alpha=2, delta=3, x=[0.5, 1])
-# B = hest.B(hest.full_param, order=2)
-# lim_expec = np.append(1, np.linalg.inv(np.eye(B.shape[0] - 1) - B[1:, 1:]) @ B[1:, 0])
-#
-# lim_inf = lim_expec[1:hest.dim + 1][:, None]
-# Sig_inf = np.zeros((hest.dim, hest.dim))
-# Sig_inf[np.triu_indices(hest.dim)] = lim_expec[hest.dim + 1:]
-# Sig_inf[np.tril_indices(hest.dim, -1)] = Sig_inf[np.triu_indices(hest.dim, 1)]
-# a = hest.a(hest.true_param)[:, None]
-# A = hest.A(hest.true_param)
-#
-# C_checkup = Sig_inf - a @ a.T - a @ lim_inf.T @ A.T - A @ lim_inf @ a.T - A @ Sig_inf @ A.T
-# C = hest.C_lim(hest.true_param)
-#
-#
-# # Check derivatives
-# hest_dist = OUNIGModel(first_observed=1, lamb=1 + 1e-5, kappa=0.5, alpha=2, delta=3, x=[0.5, 1])
-# hest_dist_m = OUNIGModel(first_observed=1, lamb=1 - 1e-5, kappa=0.5, alpha=2, delta=3, x=[0.5, 1])
-# C_dist = hest_dist.C_lim(hest_dist.true_param)
-# C_dist_m = hest_dist_m.C_lim(hest_dist_m.true_param)
-# C_deriv2 = (C_dist - 2 * C + C_dist_m) / 1e-10
-# C_deriv = (C_dist - C) / 1e-5
-# C_deriv_checkup = hest.C_lim(hest.true_param, order=1, wrt=0)
-# C_deriv2_checkup = hest.C_lim(hest.true_param, order=2, wrt=0)
-#
-# ouf = FilteredOUNIGModel(first_observed=1, lamb=1, kappa=0.5, alpha=2, delta=3, x=[0.5, 1], wrt=0)
-# ouf.calc_filter_params()
-# ouf.calc_filter_B(order=4)
-# ouf.calc_filter_B2(order=2)
-# U_mod = ouf.calculate_U()
-# W_mod = ouf.calculate_W()
-# np.sqrt(U_mod / W_mod**2)[0, 0]
-# V, Std, Corr = ouf.calculate_V()
-#
-# hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=2)
-# hestonf.calc_filter_params()
-# hestonf.calc_filter_B(order=4)
-# hestonf.calc_filter_B2(order=2)
-# hestonf.calculate_V()
-#
-# model = HestonModel.from_observations(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0_vol=0.4, obs=200000, seed=20)
-# U = model.compute_U(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
-# W = model.compute_W(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
-#
-# model = HestonModel.from_observations(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0_vol=0.4, obs=200000, seed=21)
-# U = model.compute_U(model.true_param, wrt=3, verbose=1, save_raw=True)
-# W = model.compute_W(model.true_param, wrt=3, verbose=1, save_raw=True)
-#
-# model = HestonModel.from_observations(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0_vol=0.4, obs=200000, seed=22)
-# U = model.compute_U(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
-# W = model.compute_W(hestonf.true_param, wrt=2, verbose=1, save_raw=True)
-#
-# hestonf.underlying_model.generate_observations(t_max=200000, seed=20, verbose=1)
-# U = hestonf.underlying_model.compute_U(hestonf.true_param, wrt=2, verbose=1)
-#
-#
-# ## Monte Carlo Checkup
-#
-# def simulate_heston(samples, T, dt, v0, kappa, theta, sigma, rho, antithetic=False):
-#     if 2 * theta * kappa < sigma ** 2:
-#         warnings.warn('Feller Positivity Condition is not met (2 * theta * kappa < sigma**2)')
-#
-#     steps = int(np.ceil(T / dt)) + 1
-#
-#     W = np.random.multivariate_normal(mean=[0, 0], cov=[[1, rho], [rho, 1]], size=(samples, steps))
-#     dW1, dW2 = W[:, :, 0] * np.sqrt(dt), W[:, :, 1] * np.sqrt(dt)
-#     if antithetic:
-#         dW1, dW2 = np.vstack((dW1, -dW1)), np.vstack((dW2, -dW2))
-#         samples = 2 * samples
-#     S = np.empty(shape=(samples, steps))
-#     v = np.empty(shape=(samples, steps))
-#     S[:, 0] = 0
-#     v[:, 0] = v0
-#     for timestep in trange(1, steps):
-#         v[:, timestep] = np.maximum(v[:, timestep - 1] + kappa * (theta - v[:, timestep - 1]) * dt + sigma * np.sqrt(v[:, timestep - 1]) * dW1[:, timestep - 1], 0)
-#         S[:, timestep] = S[:, timestep - 1] + np.sqrt(v[:, timestep - 1]) * dW2[:, timestep - 1]
-#     return v, S
-#
-#
-# t0 = 0
-# t = 100
-# dt = 1 / 100
-# v0 = 0.4**2
-# kappa = 1
-# theta = 0.4**2
-# sigma = 0.3
-# rho = -0.5
-#
-# samples = 10000
-#
-# v, S = simulate_heston(samples, t - t0, dt, v0, kappa, theta, sigma, rho)
-# v_final = v[:, ::100]
-# Y_final = np.hstack((np.repeat(0, 10000)[:, None], np.diff(S[:, ::100])))
-# Y_final2 = Y_final**2
-# observations = np.stack((v_final, Y_final, Y_final2), axis=0).T
-#
-# filter = hestonf.kalman_filter
-#
-# x = np.array([v0, 0, 0])
-# t_max = observations.shape[0]
-# observations = observations[..., filter.first_observed:]
-# X_hat_tp1_t_list_hom = [np.tile(x, (10000, 1)), np.tile(filter.a() + filter.A() @ x, (10000, 1))]
-# X_hat_tp1_t = X_hat_tp1_t_list_hom[-1]
-# Sig_inv = np.linalg.inv(filter.Sig_tp1_t_lim[filter.first_observed:, filter.first_observed:])
-# Sig_tp1_t_lim_o = filter.Sig_tp1_t_lim[:, filter.first_observed:]
-# tr = tqdm(total=t_max - 1)
-# tr.update(1)
-# for t in range(1, t_max - 1):
-#     X_hat_tt = X_hat_tp1_t + (Sig_tp1_t_lim_o @ Sig_inv @ (observations[t] - X_hat_tp1_t[:, filter.first_observed:]).T).T
-#     X_hat_tp1_t = filter.a() + (filter.A() @ X_hat_tt.T).T
-#     X_hat_tp1_t_list_hom.append(X_hat_tp1_t)
-#     tr.update(1)
-# tr.close()
-#
-# X_hat_tp1_t = np.stack(X_hat_tp1_t_list_hom, axis=0)
-# X_hat_tp1_t_final = X_hat_tp1_t[-1]
-# obs_final = np.stack((v_final, Y_final, Y_final2), axis=0).T[-1]
-# aug_final = np.hstack((obs_final, X_hat_tp1_t_final))
-#
-#
-# ## Monte Carlo Checkup OU
-#
-# def simulate_ou(samples, T, dt, x, lamb, kappa, alpha, delta, seed=0, antithetic=False):
-#     dt = 1 / 250
-#     steps = int(np.ceil(T / dt)) + 1
-#
-#     W = np.random.standard_normal(size=(samples, steps - 1, 2))
-#     dIG = invgauss_bn(xi=delta * dt, eta=alpha, size=(samples, steps - 1), seed=seed)
-#     dNIG = np.sqrt(dIG)[..., None] * W
-#
-#     expQ = np.array([[np.exp(-lamb * dt), 0], [kappa * (np.exp(-kappa * dt) - np.exp(-lamb * dt)) / (lamb - kappa), np.exp(-kappa * dt)]])
-#     observations = np.empty(shape=(samples, T + 1, 2))
-#     observations[:, 0] = x
-#     X = observations[:, 0]
-#     observations = [X]
-#     tr = trange(1, steps, desc='Generating Observations')
-#     for timestep in tr:
-#         X = (expQ @ (X + dNIG[:, timestep - 1]).T).T
-#         if timestep % int(1 / dt) == 0:
-#             observations.append(X)
-#
-#     observations = np.stack(observations)
-#     return observations
-#
-#
-# t0 = 0
-# t = 100
-# dt = 1 / 100
-# x = [0.5, 1]
-# lamb = 1
-# kappa = 0.5
-# alpha = 2
-# delta = 3
-#
-# samples = 10000
-#
-# obs = simulate_ou(samples, t - t0, dt, x, lamb, kappa, alpha, delta, seed=1)
-# filter = ouf.kalman_filter
-#
-# observations = obs.copy()
-# t_max = observations.shape[0]
-# observations = observations[..., filter.first_observed:]
-# X_hat_tp1_t_list_hom = [np.tile(x, (10000, 1)), np.tile(filter.a() + filter.A() @ x, (10000, 1))]
-# X_hat_tt_list_hom = [np.tile(x, (10000, 1))]
-# X_hat_tp1_t = X_hat_tp1_t_list_hom[-1]
-# Sig_inv = np.linalg.inv(filter.Sig_tp1_t_lim[filter.first_observed:, filter.first_observed:])
-# Sig_tp1_t_lim_o = filter.Sig_tp1_t_lim[:, filter.first_observed:]
-# tr = tqdm(total=t_max - 1)
-# tr.update(1)
-# for t in range(1, t_max - 1):
-#     X_hat_tt = X_hat_tp1_t + (Sig_tp1_t_lim_o @ Sig_inv @ (observations[t] - X_hat_tp1_t[:, filter.first_observed:]).T).T
-#     X_hat_tp1_t = filter.a() + (filter.A() @ X_hat_tt.T).T
-#     X_hat_tp1_t_list_hom.append(X_hat_tp1_t)
-#     X_hat_tt_list_hom.append(X_hat_tt)
-#     tr.update(1)
-# tr.close()
-#
-# X_hat_tt = np.stack(X_hat_tt_list_hom, axis=0)
-# X_hat_tp1_t = np.stack(X_hat_tp1_t_list_hom, axis=0)
-#
-# wrt = 0
-# s_star = filter.S_star(wrt=wrt)
-# partial_a = filter.a(wrt=wrt, order=1)
-# partial_A = filter.A(wrt=wrt, order=1)
-# s_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star[:, filter.first_observed:, filter.first_observed:], Sig_inv)
-# k_tilde = filter.Sig_tp1_t_lim[:, filter.first_observed:] @ Sig_inv
-# V_tp1_t_list = [np.zeros((10000, np.size(wrt), filter.dim)), np.tile(partial_a + partial_A @ x, (10000, 1, 1))]
-# V_tt_list = [np.zeros((10000, np.size(wrt), filter.dim))]
-# V_tp1_t = V_tp1_t_list[-1]
-# tr = tqdm(total=t_max - 1)
-# tr.update(1)
-# for t in range(1, t_max - 1):
-#     V_tt = V_tp1_t + np.einsum('ijk, mk -> mij', s_star[:, :, filter.first_observed:] @ Sig_inv - np.einsum('jk, ikl -> ijl', filter.Sig_tp1_t_lim[:, filter.first_observed:], s_tilde), observations[t] - X_hat_tp1_t[t, :, filter.first_observed:]) - np.einsum('jk, mik -> mij', k_tilde, V_tp1_t[:, :, filter.first_observed:])
-#     V_tp1_t = partial_a + np.einsum('ijk, mk -> mij', partial_A, X_hat_tt[t]) + np.einsum('jk, mik -> mij', filter.A(), V_tt)
-#     V_tp1_t_list.append(V_tp1_t)
-#     V_tt_list.append(V_tt)
-#     tr.update(1)
-# tr.close()
-#
-# V_tp1_t = np.stack(V_tp1_t_list, axis=0).squeeze()
-# V_tt = np.stack(V_tt_list, axis=0).squeeze()
-#
-# s_star_i = s_star[np.triu_indices(np.size(wrt))[0]]
-# s_star_j = s_star[np.triu_indices(np.size(wrt))[1]]
-# s_star_i_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star_i[:, filter.first_observed:, filter.first_observed:], Sig_inv)
-# s_star_j_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star_j[:, filter.first_observed:, filter.first_observed:], Sig_inv)
-# s_hat = np.einsum('ijk, ikl -> ijl', s_star_j[:, :, filter.first_observed:], s_star_i_tilde) + np.einsum('ijk, ikl -> ijl', s_star_i[:, :, filter.first_observed:], s_star_j_tilde)
-# s_hat_o = np.einsum('ijk, ikl -> ijl', s_star_j[:, filter.first_observed:, filter.first_observed:], s_star_i_tilde) + np.einsum('ijk, ikl -> ijl', s_star_i[:, filter.first_observed:, filter.first_observed:], s_star_j_tilde)
-#
-# r_star = filter.R_star(wrt=wrt)
-# partial_a = filter.a(wrt=wrt, order=2)
-# partial_A = filter.A(wrt=wrt, order=2)
-# partial_A_i = filter.A(wrt=wrt, order=1)[np.triu_indices(np.size(wrt))[0]]
-# partial_A_j = filter.A(wrt=wrt, order=1)[np.triu_indices(np.size(wrt))[1]]
-#
-# M = r_star[:, :, filter.first_observed:] @ Sig_inv - s_hat + np.einsum('jk, ikl -> ijl', k_tilde, s_hat_o) - np.einsum('jk, ikl, lm -> ijm', k_tilde, r_star[:, filter.first_observed:, filter.first_observed:], Sig_inv)
-# N_i = np.einsum('jk, ikl -> ijl', filter.Sig_tp1_t_lim[:, filter.first_observed:], s_star_i_tilde) - s_star_i[:, :, filter.first_observed:] @ Sig_inv
-# N_j = np.einsum('jk, ikl -> ijl', filter.Sig_tp1_t_lim[:, filter.first_observed:], s_star_j_tilde) - s_star_j[:, :, filter.first_observed:] @ Sig_inv
-#
-# W_tp1_t_list = [np.zeros((10000, np.size(wrt), filter.dim)), np.tile(partial_a + partial_A @ x, (10000, 1, 1))]
-# W_tt_list = [np.zeros((10000, np.size(wrt), filter.dim))]
-# W_tp1_t = W_tp1_t_list[-1]
-# tr = tqdm(total=t_max - 1)
-# tr.update(1)
-# for t in range(1, t_max - 1):
-#     eps = observations[t] - X_hat_tp1_t[t, :, filter.first_observed:]
-#     W_tt = W_tp1_t + np.einsum('ijk, mk -> mij', M, eps) + np.einsum('ijk, mk -> mij', N_j, V_tp1_t[t, :, filter.first_observed:]) + np.einsum('ijk, mk -> mij', N_i, V_tp1_t[t, :, filter.first_observed:]) - np.einsum('jk, mik -> mij', k_tilde, W_tp1_t[:, :, filter.first_observed:])
-#     W_tp1_t = partial_a + np.einsum('ijk, mk -> mij', partial_A, X_hat_tt[t]) + np.einsum('ijk, mk -> mij', partial_A_j, V_tt[t]) + np.einsum('ijk, mk -> mij', partial_A_i, V_tt[t]) + np.einsum('jk, mik -> mij', filter.A(), W_tt)
-#     W_tp1_t_list.append(W_tp1_t)
-#     W_tt_list.append(W_tt)
-#     tr.update(1)
-# tr.close()
-#
-# W_tp1_t = np.stack(W_tp1_t_list, axis=0).squeeze()
-# W_tt = np.stack(W_tt_list, axis=0).squeeze()
-#
-# X_hat_tp1_t_final = X_hat_tp1_t[-1]
-# V_tp1_t_final = V_tp1_t[-1]
-# W_tp1_t_final = W_tp1_t[-1]
-# obs_final = obs[-1]
-# aug_final = np.hstack((obs_final, X_hat_tp1_t_final, V_tp1_t_final, W_tp1_t_final))
+
+U_check = pkl.load(open('D:/Dokumente/Uni - Master/Masterarbeit/Python-Implementierung/OUNIGModel/Covariance/U_raw[0]_firstobserved1_seed0+1+2+3_20000000obs.pkl', 'rb'))
+W_check = pkl.load(open('D:/Dokumente/Uni - Master/Masterarbeit/Python-Implementierung/OUNIGModel/Covariance/W_raw[0]_firstobserved1_seed0+1+2+3_20000000obs.pkl', 'rb'))
+U_check = cummean(U_check, axis=0)[:, 0, 0]
+W_check = cummean(W_check, axis=0)[:, 0, 0]
+V_check = U_check / W_check**2
+Std_check = np.sqrt(V_check)
+
+plt.plot(Std_check[10000:])
