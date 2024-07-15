@@ -1084,7 +1084,7 @@ class HestonModel(PolynomialModel):
         self.params_bounds = np.array([[0.0001, 10], [0.0001 ** 2, 1], [0.0001, 1], [-1, 1]])
 
         if not np.isnan(self.true_param).any():
-            self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])
+            self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)
             if wrt is not None:
                 self.setup_filter(wrt)
         elif wrt is not None:
@@ -1235,62 +1235,62 @@ class HestonModel(PolynomialModel):
             B33 = 3 * sigma ** 2 / (2 * kappa ** 4) * (1 - np.exp(-kappa * self.dt)) ** 2 - sigma ** 2 / kappa ** 3 * (1 - np.exp(-kappa * self.dt)) * self.dt * np.exp(-kappa * self.dt) + 9 * sigma ** 2 / kappa ** 4 * (1 + 8 * rho ** 2) * (1 - np.exp(-kappa * self.dt)) - 3 * sigma ** 2 / kappa ** 3 * (1 + 8 * rho ** 2) * self.dt * np.exp(-kappa * self.dt) - 24 * sigma ** 2 / kappa ** 3 * rho ** 2 * self.dt * (1 + np.exp(-kappa * self.dt)) - 12 * sigma ** 2 / kappa ** 2 * rho ** 2 * self.dt ** 2 * np.exp(-kappa * self.dt) - 6 * sigma ** 2 / kappa ** 3 * self.dt
             deriv_array[0, 1] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
-            B11 = ((1 + 2 * kappa) * np.exp(-2 * kappa) - 1) / kappa**2 * sigma * theta
-            B12 = theta / kappa * rho * np.exp(-kappa) - theta / kappa**2 * rho * (1 - np.exp(-kappa))
-            B13 = -2 * sigma / kappa ** 3 * (1 + 4 * rho ** 2 - np.exp(-kappa)) * theta * (1 - np.exp(-kappa)) + 2 * sigma / kappa ** 2 * (1 + 2 * rho ** 2 - np.exp(-kappa)) * theta * np.exp(-kappa) + 4 / kappa ** 2 * rho ** 2 * sigma * theta * np.exp(-kappa) * (1 + kappa)
+            B11 = ((1 + 2 * kappa * self.dt) * np.exp(-2 * kappa * self.dt) - 1) / kappa**2 * sigma * theta
+            B12 = theta / kappa * rho * self.dt * np.exp(-kappa * self.dt) - theta / kappa**2 * rho * (1 - np.exp(-kappa * self.dt))
+            B13 = -2 * sigma / kappa ** 3 * (1 + 4 * rho ** 2 - np.exp(-kappa * self.dt)) * theta * (1 - np.exp(-kappa * self.dt)) + 2 * sigma / kappa ** 2 * (1 + 2 * rho ** 2 - np.exp(-kappa * self.dt)) * theta * self.dt * np.exp(-kappa * self.dt) + 4 / kappa ** 2 * rho ** 2 * sigma * theta * self.dt * np.exp(-kappa * self.dt) * (1 + kappa * self.dt)
             B22 = 0
-            B23 = 6 * rho / kappa**3 * theta * (1 - np.exp(-kappa)) - 3 * rho / kappa**2 * theta * (1 + np.exp(-kappa))
-            B33 = 3 * sigma / kappa ** 4 * theta * (1 - np.exp(-kappa)) ** 2 - 2 * sigma / kappa ** 3 * theta * (1 - np.exp(-kappa)) * np.exp(-kappa) + 18 * sigma / kappa ** 4 * theta * (1 + 8 * rho ** 2) * (1 - np.exp(-kappa)) - 6 * sigma / kappa ** 3 * theta * (1 + 8 * rho ** 2) * np.exp(-kappa) - 48 * sigma / kappa ** 3 * rho ** 2 * theta * (1 + np.exp(-kappa)) - 24 * sigma / kappa ** 2 * rho ** 2 * theta * np.exp(-kappa) - 12 * sigma / kappa ** 3 * theta
+            B23 = 6 * rho / kappa**3 * theta * (1 - np.exp(-kappa * self.dt)) - 3 * rho / kappa**2 * theta * self.dt * (1 + np.exp(-kappa * self.dt))
+            B33 = 3 * sigma / kappa ** 4 * theta * (1 - np.exp(-kappa * self.dt)) ** 2 - 2 * sigma / kappa ** 3 * theta * (1 - np.exp(-kappa * self.dt)) * np.exp(-kappa * self.dt) + 18 * sigma / kappa ** 4 * theta * (1 + 8 * rho ** 2) * (1 - np.exp(-kappa * self.dt)) - 6 * sigma / kappa ** 3 * theta * (1 + 8 * rho ** 2) * self.dt * np.exp(-kappa * self.dt) - 48 * sigma / kappa ** 3 * rho ** 2 * theta * self.dt * (1 + np.exp(-kappa * self.dt)) - 24 * sigma / kappa ** 2 * rho ** 2 * theta * self.dt**2 * np.exp(-kappa * self.dt) - 12 * sigma / kappa ** 3 * theta * self.dt
             deriv_array[0, 2] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
             B11 = 0
-            B12 = theta / kappa * sigma * np.exp(-kappa) - theta / kappa**2 * sigma * (1 - np.exp(-kappa))
-            B13 = -8 * sigma**2 / kappa**3 * rho * theta * (1 - np.exp(-kappa)) + 4 * sigma**2 / kappa**2 * rho * theta * np.exp(-kappa) * (2 + kappa)
+            B12 = theta / kappa * sigma * self.dt * np.exp(-kappa * self.dt) - theta / kappa**2 * sigma * (1 - np.exp(-kappa * self.dt))
+            B13 = -8 * sigma**2 / kappa**3 * rho * theta * (1 - np.exp(-kappa * self.dt)) + 4 * sigma**2 / kappa**2 * rho * theta * self.dt * np.exp(-kappa * self.dt) * (2 + kappa * self.dt)
             B22 = 0
-            B23 = 6 * sigma / kappa**3 * theta * (1 - np.exp(-kappa)) - 3 * sigma / kappa**2 * theta * (1 + np.exp(-kappa))
-            B33 = 144 * sigma**2 / kappa**4 * rho * theta * (1 - np.exp(-kappa)) - 48 * sigma**2 / kappa**3 * rho * theta * (1 + 2 * np.exp(-kappa)) - 24 * sigma**2 / kappa**2 * rho * theta * np.exp(-kappa)
+            B23 = 6 * sigma / kappa**3 * theta * (1 - np.exp(-kappa * self.dt)) - 3 * sigma / kappa**2 * theta * self.dt * (1 + np.exp(-kappa * self.dt))
+            B33 = 144 * sigma**2 / kappa**4 * rho * theta * (1 - np.exp(-kappa * self.dt)) - 48 * sigma**2 / kappa**3 * rho * theta * self.dt * (1 + 2 * np.exp(-kappa * self.dt)) - 24 * sigma**2 / kappa**2 * rho * theta * self.dt**2 * np.exp(-kappa * self.dt)
             deriv_array[0, 3] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
-            deriv_array[1, 1, 2, 2] = 4
+            deriv_array[1, 1, 2, 2] = 4 * self.dt**2
 
-            B11 = (1 - np.exp(-2 * kappa)) * sigma / kappa
-            B12 = rho / kappa * (1 - np.exp(-kappa))
-            B13 = sigma / kappa**2 * (1 + 4 * rho**2 - np.exp(-kappa)) * (1 - np.exp(-kappa)) - 4 / kappa * rho**2 * sigma * np.exp(-kappa)
+            B11 = (1 - np.exp(-2 * kappa * self.dt)) * sigma / kappa
+            B12 = rho / kappa * (1 - np.exp(-kappa * self.dt))
+            B13 = sigma / kappa**2 * (1 + 4 * rho**2 - np.exp(-kappa * self.dt)) * (1 - np.exp(-kappa * self.dt)) - 4 / kappa * rho**2 * sigma * self.dt * np.exp(-kappa * self.dt)
             B22 = 0
-            B23 = 3 * rho / kappa**2 * (np.exp(-kappa) - 1) + 3 * rho / kappa
-            B33 = -sigma / kappa**3 * (1 - np.exp(-kappa))**2 - 6 * sigma / kappa**3 * (1 + 8 * rho**2) * (1 - np.exp(-kappa)) + 24 * sigma / kappa**2 * rho**2 * (1 + np.exp(-kappa)) + 6 * sigma / kappa**2
+            B23 = 3 * rho / kappa**2 * (np.exp(-kappa * self.dt) - 1) + 3 * rho / kappa * self.dt
+            B33 = -sigma / kappa**3 * (1 - np.exp(-kappa * self.dt))**2 - 6 * sigma / kappa**3 * (1 + 8 * rho**2) * (1 - np.exp(-kappa * self.dt)) + 24 * sigma / kappa**2 * rho**2 * self.dt * (1 + np.exp(-kappa * self.dt)) + 6 * sigma / kappa**2 * self.dt
             deriv_array[1, 2] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
             B11 = 0
-            B12 = sigma / kappa * (1 - np.exp(-kappa))
-            B13 = 4 * sigma**2 / kappa**2 * rho * (1 - np.exp(-kappa)) - 4 / kappa * rho * sigma**2 * np.exp(-kappa)
+            B12 = sigma / kappa * (1 - np.exp(-kappa * self.dt))
+            B13 = 4 * sigma**2 / kappa**2 * rho * (1 - np.exp(-kappa * self.dt)) - 4 / kappa * rho * sigma**2 * self.dt * np.exp(-kappa * self.dt)
             B22 = 0
-            B23 = 3 * sigma / kappa**2 * (np.exp(-kappa) - 1) + 3 * sigma / kappa
-            B33 = -48 * sigma**2 / kappa**3 * rho * (1 - np.exp(-kappa)) + 24 * sigma**2 / kappa**2 * rho * (1 + np.exp(-kappa))
+            B23 = 3 * sigma / kappa**2 * (np.exp(-kappa * self.dt) - 1) + 3 * sigma / kappa * self.dt
+            B33 = -48 * sigma**2 / kappa**3 * rho * (1 - np.exp(-kappa * self.dt)) + 24 * sigma**2 / kappa**2 * rho * self.dt * (1 + np.exp(-kappa * self.dt))
             deriv_array[1, 3] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
-            B11 = (1 - np.exp(-2 * kappa)) / kappa * theta
-            B13 = 1 / kappa ** 2 * (1 + 4 * rho ** 2 - np.exp(-kappa)) * theta * (1 - np.exp(-kappa)) - 4 / kappa * rho ** 2 * theta * np.exp(-kappa)
-            B33 = -1 / kappa ** 3 * theta * (1 - np.exp(-kappa)) ** 2 - 6 / kappa ** 3 * theta * (1 + 8 * rho ** 2) * (1 - np.exp(-kappa)) + 24 / kappa ** 2 * rho ** 2 * theta * (1 + np.exp(-kappa)) + 6 / kappa ** 2 * theta
+            B11 = (1 - np.exp(-2 * kappa * self.dt)) / kappa * theta
+            B13 = 1 / kappa ** 2 * (1 + 4 * rho ** 2 - np.exp(-kappa * self.dt)) * theta * (1 - np.exp(-kappa * self.dt)) - 4 / kappa * rho ** 2 * theta * self.dt * np.exp(-kappa * self.dt)
+            B33 = -1 / kappa ** 3 * theta * (1 - np.exp(-kappa * self.dt)) ** 2 - 6 / kappa ** 3 * theta * (1 + 8 * rho ** 2) * (1 - np.exp(-kappa * self.dt)) + 24 / kappa ** 2 * rho ** 2 * theta * self.dt * (1 + np.exp(-kappa * self.dt)) + 6 / kappa ** 2 * theta * self.dt
             B22 = 0
             B12 = 0
             B23 = 0
             deriv_array[2, 2] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
             B11 = 0
-            B13 = 8 * sigma / kappa**2 * rho * theta * (1 - np.exp(-kappa)) - 8 * sigma / kappa * rho * theta * np.exp(-kappa)
-            B33 = - 96 * sigma / kappa ** 3 * theta * rho * (1 - np.exp(-kappa)) + 48 * sigma / kappa ** 2 * rho * theta * (1 + np.exp(-kappa))
+            B13 = 8 * sigma / kappa**2 * rho * theta * (1 - np.exp(-kappa * self.dt)) - 8 * sigma / kappa * rho * theta * self.dt * np.exp(-kappa * self.dt)
+            B33 = - 96 * sigma / kappa ** 3 * theta * rho * (1 - np.exp(-kappa * self.dt)) + 48 * sigma / kappa ** 2 * rho * theta * self.dt * (1 + np.exp(-kappa * self.dt))
             B22 = 0
-            B12 = theta / kappa * (1 - np.exp(-kappa))
-            B23 = 3 / kappa ** 2 * theta * (np.exp(-kappa) - 1) + 3 / kappa * theta
+            B12 = theta / kappa * (1 - np.exp(-kappa * self.dt))
+            B23 = 3 / kappa ** 2 * theta * (np.exp(-kappa * self.dt) - 1) + 3 / kappa * theta * self.dt
             deriv_array[2, 3] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
             B11 = 0
             B12 = 0
-            B13 = 4 * sigma**2 / kappa**2 * theta * (1 - np.exp(-kappa)) - 4 / kappa * sigma**2 * theta * np.exp(-kappa)
+            B13 = 4 * sigma**2 / kappa**2 * theta * (1 - np.exp(-kappa * self.dt)) - 4 / kappa * sigma**2 * theta * self.dt * np.exp(-kappa * self.dt)
             B22 = 0
             B23 = 0
-            B33 = -48 * sigma**2 / kappa**3 * theta * (1 - np.exp(-kappa)) + 24 * sigma**2 / kappa**2 * theta * (1 + np.exp(-kappa))
+            B33 = -48 * sigma**2 / kappa**3 * theta * (1 - np.exp(-kappa * self.dt)) + 24 * sigma**2 / kappa**2 * theta * self.dt * (1 + np.exp(-kappa * self.dt))
             deriv_array[3, 3] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
@@ -1590,13 +1590,59 @@ class OUNIGModel(PolynomialModel):
 
 
 init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
-init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
+# init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
+# init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 ## Test the new restructuring #1 (Simulation study, no observations needed)
-heston = HestonModel(first_observed=1, init=init, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
+heston = HestonModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
+heston2 = HestonModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
+
+# E_X = heston2.lim_expec2[1:4]
+# E_XX = np.hstack([heston2.lim_expec2[13:16], heston2.lim_expec2[14:15], heston2.lim_expec2[25:27], heston2.lim_expec2[15:16], heston2.lim_expec2[26:27], heston2.lim_expec2[36:37]]).reshape((3, 3))
+# a = heston2.a(heston2.true_param)
+# A = heston2.A(heston2.true_param)
+# BB_checkup = E_XX - np.outer(a, a) - np.outer(a, A @ E_X) - np.outer(A @ E_X, a) - A @ E_XX @ A.T
+# BB = heston2.C_lim(heston2.true_param)
+
+def check_derivatives_BB(model, h):
+    BB = model.C_lim(model.true_param)
+    BB_deriv = model.C_lim(model.true_param, order=1)
+    BB_deriv2 = model.C_lim(model.true_param, order=2)
+
+    BB_deriv_checkup = np.zeros((4, 3, 3))
+    BB_deriv2_checkup = np.zeros((10, 3, 3))
+    for i in range(4):
+        perturb_p = model.true_param + h * unit_vec(4, i + 1)
+        BB_deriv_checkup[i] = (model.C_lim(perturb_p) - BB) / h
+
+    for k in range(10):
+        i = np.triu_indices(4)[0][k]
+        j = np.triu_indices(4)[1][k]
+        if i == j:
+            perturb_p = model.true_param + h * unit_vec(4, i + 1)
+            perturb_m = model.true_param - h * unit_vec(4, i + 1)
+            BB_deriv2_checkup[k] = (model.C_lim(perturb_p) - 2 * BB + model.C_lim(perturb_m)) / h**2
+        else:
+            loc = np.zeros(4)
+            loc[i] = 1
+            loc[j] = 1
+            perturb_pp = model.true_param + h * loc
+            perturb_mm = model.true_param - h * loc
+
+            loc[i] = 1
+            loc[j] = -1
+            perturb_pm = model.true_param + h * loc
+            perturb_mp = model.true_param - h * loc
+
+            BB_deriv2_checkup[k] = (model.C_lim(perturb_pp) - model.C_lim(perturb_pm) - model.C_lim(perturb_mp) + model.C_lim(perturb_mm)) / (4 * h**2)
+
+    return np.abs(BB_deriv - BB_deriv_checkup), np.abs(BB_deriv2 - BB_deriv2_checkup)
+
+abs1, abs2 = check_derivatives_BB(heston2, 1e-4)
+
+
 V, Std, Corr = heston.compute_V()
 
-ou = OUNIGModel(first_observed=1, init=init, true_param=np.array([1, 0.5, 1.5]), wrt=1)
+ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=1)
 V, Std, Corr = ou.compute_V()
 
 ## Test the new restructuring #2 (Simulation study with observations)
