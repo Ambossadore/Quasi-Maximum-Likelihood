@@ -566,6 +566,10 @@ class PolynomialModel:
             Sig_tp1_t_list_det = np.append(Sig_tp1_t_list_det, np.repeat(final_det, t - kfilter.Sig_tp1_t_list.shape[0] + 1))
         return np.sum(-0.5 * (Sig_tp1_t_list_det[:t] + np.einsum('ij, ijk, ik -> i', eps, Sig_tp1_t_list_inv[:t, :, :], eps)))
 
+    samples = []
+    for i in range(1, t + 1):
+        samples.append(np.random.multivariate_normal(mean=kfilter.X_hat_tp1_t_list[i], cov=kfilter.Sig_tp1_t_lim))
+
     def fit_qml(self, fit_parameter, initial, t=None, verbose=1, update_estimate=False):
         global it
         it = 1
@@ -1597,15 +1601,17 @@ init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
 # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 ## Test the new restructuring #1 (Simulation study, no observations needed)
-heston = HestonModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=1)
-V, Std, Corr = heston.compute_V()
-
-ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=1)
-V, Std, Corr = ou.compute_V()
+# heston = HestonModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=1)
+# V, Std, Corr = heston.compute_V()
+#
+# ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=1)
+# V, Std, Corr = ou.compute_V()
 
 ## Test the new restructuring #2 (Simulation study with observations)
-heston = HestonModel.from_observations(first_observed=1, init=init, dt=1, obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=5)
-heston2 = HestonModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=200000, inter_steps=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=1)
+heston = HestonModel.from_observations(first_observed=0, init=init, dt=1, obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=20)
+heston2 = HestonModel.from_observations(first_observed=0, init=init, dt=1/24000, obs=200000, inter_steps=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=1)
+
+heston2.log_lik(param=np.array([1, 0.16, 0.21, -0.5]), t=50000, verbose=1)/50000
 fits = []
 for i in range(10):
     heston = HestonModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=200000, inter_steps=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=i)
