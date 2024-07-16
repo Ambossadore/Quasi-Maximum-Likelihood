@@ -221,3 +221,47 @@ class InitialDistribution:
             v = np.random.gamma(shape=2 * kappa * theta / sigma**2, scale=sigma**2 / (2 * kappa), size=(n, 1))
             sample = np.hstack((v, np.tile(self.hyper, (n, 1))))
             return sample.squeeze()
+
+
+def check_derivatives_BB(model, h):
+    BB = model.C_lim(model.true_param)
+    BB_deriv = model.C_lim(model.true_param, order=1)
+    BB_deriv2 = model.C_lim(model.true_param, order=2)
+
+    E_X = model.lim_expec2[1:4]
+    E_XX = np.hstack([model.lim_expec2[13:16], model.lim_expec2[14:15], model.lim_expec2[25:27], model.lim_expec2[15:16], model.lim_expec2[26:27], model.lim_expec2[36:37]]).reshape((3, 3))
+    a = heston2.a(model.true_param)
+    A = heston2.A(model.true_param)
+    BB_checkup = E_XX - np.outer(a, a) - np.outer(a, A @ E_X) - np.outer(A @ E_X, a) - A @ E_XX @ A.T
+
+    BB_deriv_checkup = np.zeros((4, 3, 3))
+    BB_deriv2_checkup = np.zeros((10, 3, 3))
+    for i in range(4):
+        perturb_p = model.true_param + h * unit_vec(4, i + 1)
+        BB_deriv_checkup[i] = (model.C_lim(perturb_p) - BB) / h
+
+    for k in range(10):
+        i = np.triu_indices(4)[0][k]
+        j = np.triu_indices(4)[1][k]
+        if i == j:
+            perturb_p = model.true_param + h * unit_vec(4, i + 1)
+            perturb_m = model.true_param - h * unit_vec(4, i + 1)
+            BB_deriv2_checkup[k] = (model.C_lim(perturb_p) - 2 * BB + model.C_lim(perturb_m)) / h**2
+        else:
+            loc = np.zeros(4)
+            loc[i] = 1
+            loc[j] = 1
+            perturb_pp = model.true_param + h * loc
+            perturb_mm = model.true_param - h * loc
+
+            loc[i] = 1
+            loc[j] = -1
+            perturb_pm = model.true_param + h * loc
+            perturb_mp = model.true_param - h * loc
+
+            BB_deriv2_checkup[k] = (model.C_lim(perturb_pp) - model.C_lim(perturb_pm) - model.C_lim(perturb_mp) + model.C_lim(perturb_mm)) / (4 * h**2)
+
+    return np.abs(BB - BB_checkup), np.abs(BB_deriv - BB_deriv_checkup), np.abs(BB_deriv2 - BB_deriv2_checkup)
+
+
+# abs0, abs1, abs2 = check_derivatives_BB(heston2, 1e-4)

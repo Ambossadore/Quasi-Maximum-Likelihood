@@ -309,12 +309,12 @@ class PolynomialModel:
             C = self.filter_C4
             c = self.filter_c4
             Y = self.filter_Y4
-            filepath = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+            filepath = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
         elif order == 2:
             C = self.filter_C2
             c = self.filter_c2
             Y = self.filter_Y2
-            filepath = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+            filepath = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
         else:
             raise Exception('Argument order has to be 4 or 2.')
 
@@ -515,39 +515,39 @@ class PolynomialModel:
         third_row_Y2 = [np.vstack(A_20), block, np.kron(np.eye(int(k * (k + 1) / 2)), A_22)]
         self.filter_Y2 = np.block([first_row_Y2, second_row_Y2, third_row_Y2])
 
-        filepath_B4 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+        filepath_B4 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
         if os.path.exists(filepath_B4):
             self.filter_B4 = np.loadtxt(filepath_B4)
             self.lim_expec4 = np.append(1, np.linalg.inv(np.eye(self.filter_B4.shape[0] - 1) - self.filter_B4[1:, 1:]) @ self.filter_B4[1:, 0])
         else:
             self.calc_filter_B(order=4)
 
-        filepath_B2 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.savestring)
+        filepath_B2 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
         if os.path.exists(filepath_B2):
             self.filter_B2 = np.loadtxt(filepath_B2)
             self.lim_expec2 = np.append(1, np.linalg.inv(np.eye(self.filter_B2.shape[0] - 1) - self.filter_B2[1:, 1:]) @ self.filter_B2[1:, 0])
         else:
             self.calc_filter_B(order=2)
 
-    def generate_observations(self, t_max, seed, verbose):
+    def generate_observations(self, t_max, inter_steps, seed, verbose):
         pass
 
     @classmethod
-    def from_observations(cls, first_observed, init, obs, dt=None, true_param=None, wrt=None, seed=None):
+    def from_observations(cls, first_observed, init, dt, obs, inter_steps=None, true_param=None, wrt=None, seed=None):
         if isinstance(obs, str):
             filename = './saves/' + cls.__name__ + '/Observations/' + obs
         else:
             if seed is not None:
-                filename = './saves/' + cls.__name__ + '/Observations/observations_par=[' + ''.join('{:.3f}, '.format(item) for item in true_param[:-1]) + '{:.3f}]_seed{}_{}obs.txt'.format(true_param[-1], seed, obs)
+                filename = './saves/' + cls.__name__ + '/Observations/observations_par=[' + ''.join('{:.3f}, '.format(item) for item in true_param[:-1]) + '{:.3f}]_dt={:.1e}_seed{}_{}obs.txt'.format(true_param[-1], dt, seed, obs)
             else:
-                filename = './saves/' + cls.__name__ + '/Observations/observations_par=[' + ''.join('{:.3f}, '.format(item) for item in true_param[:-1]) + '{:.3f}]_{}obs.txt'.format(true_param[-1], obs)
-        obj = cls(first_observed=first_observed, init=init, true_param=true_param, wrt=wrt)
+                filename = './saves/' + cls.__name__ + '/Observations/observations_par=[' + ''.join('{:.3f}, '.format(item) for item in true_param[:-1]) + '{:.3f}]_dt={:.1e}_{}obs.txt'.format(true_param[-1], dt, obs)
+        obj = cls(first_observed=first_observed, init=init, dt=dt, true_param=true_param, wrt=wrt)
 
         if os.path.exists(filename):
             observations = np.loadtxt(filename)
             obj.observations = observations
         else:
-            obj.generate_observations(t_max=obs, dt=dt, seed=seed, verbose=1)
+            obj.generate_observations(t_max=obs * dt, inter_steps=inter_steps, seed=seed, verbose=1)
 
         obj.seed = seed
         return obj
@@ -606,7 +606,7 @@ class PolynomialModel:
 
         if update_estimate:
             self.true_param[fit_parameter] = result
-            self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])
+            self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)
 
         return result
 
@@ -628,7 +628,7 @@ class PolynomialModel:
 
             if update_estimate:
                 self.true_param[fit_parameter] = qml_list[-1]
-                self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])
+                self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)
 
         else:
             t_range = np.arange(t_max + every)[::every][1:]
@@ -951,18 +951,18 @@ class PolynomialModel:
 
         if kind == 'explicit':
             if self.U is None:
-                self.U = self.compute_U()
+                self.U = self.compute_U(wrt=wrt)
             if self.W is None:
-                self.W = self.compute_W()
+                self.W = self.compute_W(wrt=wrt)
 
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')
                 W_inv = np.linalg.inv(self.W)
                 V = W_inv @ self.U @ W_inv
                 Std = np.sqrt(np.diagonal(V))
-                Std_inv = np.eye(np.size(self.wrt)) / Std
+                Std_inv = np.eye(np.size(wrt)) / Std
                 Corr = Std_inv @ V @ Std_inv
-                Corr[np.diag_indices(np.size(self.wrt))[0], np.diag_indices(np.size(self.wrt))[1]] = 1
+                Corr[np.diag_indices(np.size(wrt))[0], np.diag_indices(np.size(wrt))[1]] = 1
 
             return V, Std, Corr
         elif kind == 'estimate':
@@ -1321,9 +1321,13 @@ class HestonModel(PolynomialModel):
             N33 = 1 / kappa**3 * (9 * sigma**2 * theta * (1 + 4 * rho**2) + 4 * kappa**2 * theta**2 * self.dt) * (np.exp(-kappa * self.dt) - 1) + 1 / kappa**3 * (2 * kappa * theta**2 + 3 / 2 * sigma**2 * theta) * (np.exp(-kappa * self.dt) - 1)**2 + 6 * sigma**2 / kappa**2 * theta * (1 + 4 * rho**2 + kappa * rho**2 * self.dt) * self.dt * np.exp(-kappa * self.dt) + 3 * sigma**2 / kappa**2 * theta * (1 + 4 * rho**2) * self.dt + 2 * theta**2 * self.dt ** 2
             return np.array([N11, N12, N13, N12, N22, N23, N13, N23, N33])
 
-    def generate_observations(self, t_max, dt, seed=None, verbose=0):
+    def generate_observations(self, t_max, inter_steps, seed=None, verbose=0):
+        dt = self.dt / inter_steps
         if seed is not None:
             np.random.seed(seed)
+
+        if not isinstance(inter_steps, int):
+            raise TypeError('Attribute inter_steps needs to be integer.')
 
         if np.isnan(self.true_param).any():
             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
@@ -1339,7 +1343,7 @@ class HestonModel(PolynomialModel):
         if 2 * theta * kappa < sigma ** 2:
             warnings.warn('Feller Positivity Condition is not met (2 * theta * kappa < sigma**2)')
 
-        steps = int(np.ceil(t_max / dt)) + 1
+        steps = int(np.ceil(np.round(t_max / dt, 7))) + 1
         W = np.random.multivariate_normal(mean=[0, 0], cov=[[1, rho], [rho, 1]], size=steps)
         Wdt = W * np.sqrt(dt)
         dW1, dW2 = Wdt[:, 0], Wdt[:, 1]
@@ -1348,7 +1352,7 @@ class HestonModel(PolynomialModel):
         for timestep in tr:
             S0 = S0 + np.sqrt(v0) * dW2[timestep - 1]
             v0 = np.maximum(v0 + kappa * (theta - v0) * dt + sigma * np.sqrt(v0) * dW1[timestep - 1], 0)
-            if timestep % int(1 / dt) == 0:
+            if timestep % inter_steps == 0:
                 S.append(S0)
                 v.append(v0)
 
@@ -1364,9 +1368,9 @@ class HestonModel(PolynomialModel):
             self.seed = seed
 
         if self.seed is not None:
-            np.savetxt('./saves/HestonModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, t_max), observations)
+            np.savetxt('./saves/HestonModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, observations.shape[0] - 1), observations)
         else:
-            np.savetxt('./saves/HestonModel/Observations/observations_{}_{}obs.txt'.format(self.savestring, t_max), observations)
+            np.savetxt('./saves/HestonModel/Observations/observations_{}_{}obs.txt'.format(self.savestring, observations.shape[0] - 1), observations)
         self.observations = observations
 
 
@@ -1593,60 +1597,21 @@ init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
 # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 ## Test the new restructuring #1 (Simulation study, no observations needed)
-heston = HestonModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
-heston2 = HestonModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
-
-# E_X = heston2.lim_expec2[1:4]
-# E_XX = np.hstack([heston2.lim_expec2[13:16], heston2.lim_expec2[14:15], heston2.lim_expec2[25:27], heston2.lim_expec2[15:16], heston2.lim_expec2[26:27], heston2.lim_expec2[36:37]]).reshape((3, 3))
-# a = heston2.a(heston2.true_param)
-# A = heston2.A(heston2.true_param)
-# BB_checkup = E_XX - np.outer(a, a) - np.outer(a, A @ E_X) - np.outer(A @ E_X, a) - A @ E_XX @ A.T
-# BB = heston2.C_lim(heston2.true_param)
-
-def check_derivatives_BB(model, h):
-    BB = model.C_lim(model.true_param)
-    BB_deriv = model.C_lim(model.true_param, order=1)
-    BB_deriv2 = model.C_lim(model.true_param, order=2)
-
-    BB_deriv_checkup = np.zeros((4, 3, 3))
-    BB_deriv2_checkup = np.zeros((10, 3, 3))
-    for i in range(4):
-        perturb_p = model.true_param + h * unit_vec(4, i + 1)
-        BB_deriv_checkup[i] = (model.C_lim(perturb_p) - BB) / h
-
-    for k in range(10):
-        i = np.triu_indices(4)[0][k]
-        j = np.triu_indices(4)[1][k]
-        if i == j:
-            perturb_p = model.true_param + h * unit_vec(4, i + 1)
-            perturb_m = model.true_param - h * unit_vec(4, i + 1)
-            BB_deriv2_checkup[k] = (model.C_lim(perturb_p) - 2 * BB + model.C_lim(perturb_m)) / h**2
-        else:
-            loc = np.zeros(4)
-            loc[i] = 1
-            loc[j] = 1
-            perturb_pp = model.true_param + h * loc
-            perturb_mm = model.true_param - h * loc
-
-            loc[i] = 1
-            loc[j] = -1
-            perturb_pm = model.true_param + h * loc
-            perturb_mp = model.true_param - h * loc
-
-            BB_deriv2_checkup[k] = (model.C_lim(perturb_pp) - model.C_lim(perturb_pm) - model.C_lim(perturb_mp) + model.C_lim(perturb_mm)) / (4 * h**2)
-
-    return np.abs(BB_deriv - BB_deriv_checkup), np.abs(BB_deriv2 - BB_deriv2_checkup)
-
-abs1, abs2 = check_derivatives_BB(heston2, 1e-4)
-
-
+heston = HestonModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=1)
 V, Std, Corr = heston.compute_V()
 
 ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=1)
 V, Std, Corr = ou.compute_V()
 
 ## Test the new restructuring #2 (Simulation study with observations)
-heston = HestonModel.from_observations(first_observed=1, init=init, obs=200000, dt=1/250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=5)
+heston = HestonModel.from_observations(first_observed=1, init=init, dt=1, obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=5)
+heston2 = HestonModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=200000, inter_steps=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=1)
+fits = []
+for i in range(10):
+    heston = HestonModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=200000, inter_steps=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=i)
+    # fits2.append(heston.fit_qml(fit_parameter=2, initial=0.3, t=200000))
+    fits.append(np.std(heston.observations[:, 0]) / np.sqrt(0.08))
+
 result = heston.fit_qml(fit_parameter=2, initial=0.3, t=10000)
 result = heston.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
 V, Std, Corr = heston.compute_V(kind='estimate', wrt=2, verbose=1)
