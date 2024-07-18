@@ -228,8 +228,12 @@ def check_derivatives_BB(model, h):
     BB_deriv = model.C_lim(model.true_param, order=1)
     BB_deriv2 = model.C_lim(model.true_param, order=2)
 
-    E_X = model.lim_expec2[1:4]
-    E_XX = np.hstack([model.lim_expec2[13:16], model.lim_expec2[14:15], model.lim_expec2[25:27], model.lim_expec2[15:16], model.lim_expec2[26:27], model.lim_expec2[36:37]]).reshape((3, 3))
+    if ou.__class__.__name__ == 'HestonModel':
+        E_X = model.lim_expec2[1:4]
+        E_XX = np.hstack([model.lim_expec2[13:16], model.lim_expec2[14:15], model.lim_expec2[25:27], model.lim_expec2[15:16], model.lim_expec2[26:27], model.lim_expec2[36:37]]).reshape((3, 3))
+    elif ou.__class__.__name__ == 'OUNIGModel':
+        E_X = model.lim_expec2[1:3]
+        E_XX = np.hstack([model.lim_expec2[9:11], model.lim_expec2[10:11], model.lim_expec2[17:18]]).reshape((2, 2))
     a = heston2.a(model.true_param)
     A = heston2.A(model.true_param)
     BB_checkup = E_XX - np.outer(a, a) - np.outer(a, A @ E_X) - np.outer(A @ E_X, a) - A @ E_XX @ A.T
