@@ -1382,7 +1382,7 @@ class OUNIGModel(PolynomialModel):
         super().__init__(first_observed, init, dt, true_param)
         self.dim = 2
         self.params_names = np.array(['lambda', 'kappa', 'delta'])
-        self.params_bounds = np.array([[0.001, 10.001], [0.0001, 10], [0.0001, 10]])
+        self.params_bounds = np.array([[0.001, 10], [0.0001, 30], [0.0001, 10]])
 
         if not np.isnan(self.true_param).any():
             self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.dt)
@@ -1520,7 +1520,7 @@ class OUNIGModel(PolynomialModel):
 
             B11 = 0
             B12 = - (delta / alpha) / (2 * lamb) * (2 * lamb / (lamb + kappa) ** 3 + 2 * np.exp(-lamb * self.dt) * psi_k + kappa * np.exp(-lamb * self.dt) * psi_kk)
-            B22 = (delta / alpha) / lamb * (np.exp(-2 * kappa * self.dt) * (2 * (kappa ** 2 * self.dt**2 + lamb * self.dt) / (lamb + kappa) ** 2 - 4 * self.dt * kappa * lamb / (lamb + kappa) ** 3 + lamb * (lamb - 2 * kappa) / (lamb + kappa) ** 4 - 2 * kappa * self.dt**2 / (lamb + kappa) - 2 * lamb / kappa ** 2 * (1 + kappa * self.dt)) + (1 - np.exp(-2 * kappa * self.dt)) * lamb * (1 / kappa ** 3 - 1 / (lamb + kappa) ** 3) - psi ** 2 - 4 * kappa * psi * psi_k - kappa ** 2 * psi_k ** 2 - kappa ** 2 * psi * psi_kk)
+            B22 = (delta / alpha) / lamb * (np.exp(-2 * kappa * self.dt) * (2 * (kappa ** 2 * self.dt**2 + lamb * self.dt) / (lamb + kappa) ** 2 - 4 * self.dt * kappa * lamb / (lamb + kappa) ** 3 + lamb * (lamb - 2 * kappa) / (lamb + kappa) ** 4 - 2 * kappa * self.dt**2 / (lamb + kappa) - 2 * lamb / kappa ** 2 * self.dt * (1 + kappa * self.dt)) + (1 - np.exp(-2 * kappa * self.dt)) * lamb * (1 / kappa ** 3 - 1 / (lamb + kappa) ** 3) - psi ** 2 - 4 * kappa * psi * psi_k - kappa ** 2 * psi_k ** 2 - kappa ** 2 * psi * psi_kk)
             deriv_array[1, 1] = np.array([[B11, B12], [B12, B22]])
 
             B11 = 0
@@ -1588,43 +1588,33 @@ class OUNIGModel(PolynomialModel):
             self.seed = seed
 
         if self.seed is not None:
-            np.savetxt('./saves/OUNIGModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, t_max), observations)
+            np.savetxt('./saves/OUNIGModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, observations.shape[0] - 1), observations)
         else:
-            np.savetxt('./saves/OUNIGModel/Observations/observations_{}_{}obs.txt'.format(self.savestring, t_max), observations)
+            np.savetxt('./saves/OUNIGModel/Observations/observations_{}_{}obs.txt'.format(self.savestring, observations.shape[0] - 1), observations)
         self.observations = observations
 
 
 # init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
 init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
+
 ## Test the new restructuring #1 (Simulation study, no observations needed)
-# heston = HestonModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=1)
-# V, Std, Corr = heston.compute_V()
-#
-ou = OUNIGModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.5, 1.5]), wrt=2)
+heston = HestonModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=1)
+V, Std, Corr = heston.compute_V()
+ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=2)
 V, Std, Corr = ou.compute_V()
 
+
 ## Test the new restructuring #2 (Simulation study with observations)
-heston = HestonModel.from_observations(first_observed=0, init=init, dt=1, obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=20)
-heston2 = HestonModel.from_observations(first_observed=0, init=init, dt=1/24000, obs=200000, inter_steps=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=1)
-
-heston2.log_lik(param=np.array([1, 0.16, 0.21, -0.5]), t=50000, verbose=1) / 50000
-fits = []
-for i in range(10):
-    heston = HestonModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=200000, inter_steps=1, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=i)
-    # fits2.append(heston.fit_qml(fit_parameter=2, initial=0.3, t=200000))
-    fits.append(np.std(heston.observations[:, 0]) / np.sqrt(0.08))
-
-result = heston.fit_qml(fit_parameter=2, initial=0.3, t=10000)
+heston = HestonModel.from_observations(first_observed=0, init=init, dt=1/24000, obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=20)
+result = heston.fit_qml(fit_parameter=2, initial=0.3, t=200000)
 result = heston.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
 V, Std, Corr = heston.compute_V(kind='estimate', wrt=2, verbose=1)
-U = heston.compute_U(kind='estimate', wrt=2, verbose=1)
 
-ou = OUNIGModel.from_observations(first_observed=1, init=init, obs=200000, dt=1, inter_steps=250, true_param=np.array([1, 0.5, 1.5]), seed=5)
 fits = []
 for i in range(10):
-    ou = OUNIGModel.from_observations(first_observed=1, init=init, obs=10000, dt=1 / 250, true_param=np.array([1, 0.5, 1.5]), seed=i)
-    fits.append(ou.fit_qml(fit_parameter=1, initial=0.5, t=10000))
+    ou = OUNIGModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=10000, inter_steps=250, true_param=np.array([1, 0.5, 1.5]), seed=i)
+    fits.append(ou.fit_qml(fit_parameter=1, initial=0.5, t=200000))
 V, Std, Corr = ou.compute_V(kind='estimate', wrt=1, verbose=1)
 
 
@@ -1642,6 +1632,7 @@ heston = HestonModel.from_observations(first_observed=1, init=init, obs='observa
 seq = heston.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=200)
 res = heston.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
 
+
 ## Heston wrt = 2 --> 82.97s
 ## Heston wrt = [2, 3] --> 909.72s
 ## Heston wrt = [1, 2, 3] --> 7555.98s
@@ -1651,12 +1642,3 @@ hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3,
 V, Std, Corr = hestonf.calculate_V()
 toc = time()
 print(toc - tic)
-
-U_check = pkl.load(open('D:/Dokumente/Uni - Master/Masterarbeit/Python-Implementierung/OUNIGModel/Covariance/U_raw[0]_firstobserved1_seed0+1+2+3_20000000obs.pkl', 'rb'))
-W_check = pkl.load(open('D:/Dokumente/Uni - Master/Masterarbeit/Python-Implementierung/OUNIGModel/Covariance/W_raw[0]_firstobserved1_seed0+1+2+3_20000000obs.pkl', 'rb'))
-U_check = cummean(U_check, axis=0)[:, 0, 0]
-W_check = cummean(W_check, axis=0)[:, 0, 0]
-V_check = U_check / W_check**2
-Std_check = np.sqrt(V_check)
-
-plt.plot(Std_check[10000:])
