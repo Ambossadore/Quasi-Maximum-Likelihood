@@ -247,12 +247,11 @@ class KalmanFilter:
 
 
 class PolynomialModel:
-    def __init__(self, first_observed, init, dt, true_param=None):
+    def __init__(self, first_observed, init, dt, signature, true_param=None):
         self.first_observed = first_observed
         self.true_param = np.array(true_param) if true_param is not None else None
         self.init = init
         self.dt = dt
-        self.dim = None
         self.params_names = ''
         self.params_bounds = None
         self.savestring = ''
@@ -274,6 +273,27 @@ class PolynomialModel:
         self.W = None
         self.kalman_filter = None
 
+        signature = signature.split('_')
+        self.dim_c = len(signature)
+        self.differenced_components = np.array([i for i, s in enumerate(signature) if 'd' in s])
+        self.undiff_components = np.setdiff1d(np.arange(self.dim_c), self.differenced_components)
+        for i, itm in enumerate(signature):
+            if ':' in itm:
+                signature[i] = np.arange(int(itm.split(':')[0][-1]), int(itm.split(':')[1][0]) + 1).tolist()
+            else:
+                signature[i] = eval(signature[i][signature[i].index('['):])
+        self.signature = signature
+        self.dim = len(sum(signature, []))
+        counter = 0
+        self.signature_indices = []
+
+        for sublist in self.signature:
+            new_sublist = []
+            for _ in sublist:
+                new_sublist.append(counter)
+                counter += 1
+            self.signature_indices.append(new_sublist)
+
         init_path = './saves/' + self.__class__.__name__
         paths = [init_path + string for string in ['/Covariance/Estimated', '/Covariance/Explicit', '/Observations', '/Polynomial Matrices', '/QML Sequences']]
 
@@ -286,8 +306,40 @@ class PolynomialModel:
     def A(self, param, order=None, wrt=None):
         pass
 
-    def B(self, param, order):
+    def poly_A(self, param, order=None):
         pass
+
+    def poly_B(self, param, order):
+        dicts = return_dict(self.dim_c, max(sum(self.signature, [])) * order)
+        poly_B_gen = np.zeros((n_dim(self.dim_c, max(sum(self.signature, [])) * order), n_dim(self.dim_c, max(sum(self.signature, [])) * order)))
+        for i in range(poly_B_gen.shape[0]):
+            for j in range(poly_B_gen.shape[1]):
+                masks = mask(dicts[i], dicts, typ='leq') & mask(dicts[j], dicts, typ='leq')
+                lamb_ell = (ind_to_mult(i, dicts) - dicts)[masks]
+                mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
+                poly_B_gen[i, j] = (multi_binom(dicts[i], dicts[masks]) * heston_A[mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum()
+
+        poly_B = expm(poly_B_gen * self.dt)
+        if np.size(self.differenced_components) == 0:
+            return poly_B
+        else:
+            poly_B_sig = np.zeros((n_dim(self.dim, order), n_dim(self.dim, order)))
+            dicts_sig = return_dict(self.dim, order)
+
+            diff_cols_zero = np.all([(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]], axis=0)
+            undiff_cols_duplicates = np.all([(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]], axis=0)
+            cols = np.where(diff_cols_zero & undiff_cols_duplicates)[0]
+
+            diff_cols_zero_orig = np.all([(dicts[:, i] == 0) for i in self.differenced_components], axis=0)
+            undiff_cols_duplicates_orig = [dicts[:, i] == np.sum(dicts_sig[np.ix_(cols, self.signature_indices[i])] * np.array(signature[i]), axis=1) for i in self.undiff_components]
+            cols2 = np.where((dicts[:, 1] == 0))[0][:cols.shape[0]]
+
+            for i in range(poly_B_sig.shape[0]):
+                lamb = ind_to_mult(i, dicts_sig)
+                lamb_tilde = np.array([lamb[0], lamb[1] + 2 * lamb[2]])
+                ind = mult_to_ind(lamb_tilde, dicts)
+                poly_B_sig[i, cols] = poly_B[ind, cols2]
+
 
     def C(self, param, t):
         pass
@@ -319,7 +371,7 @@ class PolynomialModel:
             raise Exception('Argument order has to be 4 or 2.')
 
         k, d = C.shape
-        B = self.B(param=self.true_param, order=order)
+        B = self.poly_B(param=self.true_param, order=order)
         if np.any(c):
             C = np.vstack((C, np.repeat(0, d)))
             Y = np.vstack((Y, np.repeat(0, k)))
@@ -1074,12 +1126,12 @@ class PolynomialModel:
 
 
 class HestonModel(PolynomialModel):
-    def __init__(self, first_observed, init, dt, true_param=None, wrt=None):
+    def __init__(self, first_observed, init, dt, signature, true_param=None, wrt=None):
         if true_param is None:
             true_param = np.repeat(np.nan, 4)
 
-        super().__init__(first_observed, init, dt, true_param)
-        self.dim = 3
+        super().__init__(first_observed, init, dt, signature, true_param)
+        self.dim_c = 2
         self.params_names = np.array(['kappa', 'theta', 'sigma', 'rho'])
         self.params_bounds = np.array([[0.0001, 10], [0.0001 ** 2, 1], [0.0001, 1], [-1, 1]])
 
@@ -1122,7 +1174,7 @@ class HestonModel(PolynomialModel):
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    def B(self, param, order):
+    def poly_B(self, param, order):
         kappa, theta, sigma, rho = param
         mu, delta = 0, 0
         dicts = return_dict(2, 2 * order)
@@ -1145,8 +1197,6 @@ class HestonModel(PolynomialModel):
                 heston_Bc[i, j] = (multi_binom(dicts[i], dicts[masks]) * heston_A[mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum()
 
         heston_B = expm(heston_Bc * self.dt)
-        heston_B_diff = np.zeros(heston_B.shape)
-        heston_B_diff[:, dicts[:, 1] == 0] = heston_B[:, dicts[:, 1] == 0]
 
         heston_B_diff_sq = np.zeros((n_dim(3, order), n_dim(3, order)))
         dicts_sq = return_dict(3, order)
@@ -1426,7 +1476,7 @@ class OUNIGModel(PolynomialModel):
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    def B(self, param, order):
+    def poly_B(self, param, order):
         lamb, kappa, delta = param
         dicts = return_dict(2, order)
         alpha = 1
@@ -1594,12 +1644,12 @@ class OUNIGModel(PolynomialModel):
         self.observations = observations
 
 
-# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
+init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+# init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 ## Test the new restructuring #1 (Simulation study, no observations needed)
-heston = HestonModel(first_observed=1, init=init, dt=1/24000, true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=1)
+heston = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=1)
 V, Std, Corr = heston.compute_V()
 ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=2)
 V, Std, Corr = ou.compute_V()
