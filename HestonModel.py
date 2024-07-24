@@ -300,69 +300,75 @@ class PolynomialModel:
         for path in paths:
             Path(path).mkdir(parents=True, exist_ok=True)
 
-    def a(self, param, order=None, wrt=None):
+    def a(self, param, deriv_order=0, wrt=None):
         pass
 
-    def A(self, param, order=None, wrt=None):
+    def A(self, param, deriv_order=0, wrt=None):
         pass
 
-    def poly_A(self, param, order=None):
+    def poly_A(self, param, poly_order, deriv_order=0, wrt=None):
         pass
 
-    def poly_B(self, param, order):
-        dicts = return_dict(self.dim_c, max(sum(self.signature, [])) * order)
-        poly_B_gen = np.zeros((n_dim(self.dim_c, max(sum(self.signature, [])) * order), n_dim(self.dim_c, max(sum(self.signature, [])) * order)))
-        for i in range(poly_B_gen.shape[0]):
+    def poly_B(self, param, poly_order):
+        tic = time()
+        poly_A = self.poly_A(param, max(sum(self.signature, [])) * poly_order)
+
+        dicts = return_dict(self.dim_c, max(sum(self.signature, [])) * poly_order)
+        poly_B_gen = np.zeros((n_dim(self.dim_c, max(sum(self.signature, [])) * poly_order), n_dim(self.dim_c, max(sum(self.signature, [])) * poly_order)))
+        for i in trange(poly_B_gen.shape[0]):
             for j in range(poly_B_gen.shape[1]):
                 masks = mask(dicts[i], dicts, typ='leq') & mask(dicts[j], dicts, typ='leq')
                 lamb_ell = (ind_to_mult(i, dicts) - dicts)[masks]
                 mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
-                poly_B_gen[i, j] = (multi_binom(dicts[i], dicts[masks]) * heston_A[mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum()
+                poly_B_gen[i, j] = (multi_binom(dicts[i], dicts[masks]) * poly_A[mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum()
 
         poly_B = expm(poly_B_gen * self.dt)
-        if np.size(self.differenced_components) == 0:
-            return poly_B
-        else:
-            poly_B_sig = np.zeros((n_dim(self.dim, order), n_dim(self.dim, order)))
-            dicts_sig = return_dict(self.dim, order)
 
-            diff_cols_zero = np.all([(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]], axis=0)
-            undiff_cols_duplicates = np.all([(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]], axis=0)
-            cols = np.where(diff_cols_zero & undiff_cols_duplicates)[0]
+        poly_B_sig = np.zeros((n_dim(self.dim, poly_order), n_dim(self.dim, poly_order)))
+        dicts_sig = return_dict(self.dim, poly_order)
 
-            diff_cols_zero_orig = np.all([(dicts[:, i] == 0) for i in self.differenced_components], axis=0)
-            undiff_cols_duplicates_orig = [dicts[:, i] == np.sum(dicts_sig[np.ix_(cols, self.signature_indices[i])] * np.array(signature[i]), axis=1) for i in self.undiff_components]
-            cols2 = np.where((dicts[:, 1] == 0))[0][:cols.shape[0]]
+        diff_cols_zero = np.all([(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]], axis=0)
+        undiff_cols_duplicates = np.all([(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]], axis=0)
+        cols = np.where(diff_cols_zero & undiff_cols_duplicates)[0]
 
-            for i in range(poly_B_sig.shape[0]):
-                lamb = ind_to_mult(i, dicts_sig)
-                lamb_tilde = np.array([lamb[0], lamb[1] + 2 * lamb[2]])
-                ind = mult_to_ind(lamb_tilde, dicts)
-                poly_B_sig[i, cols] = poly_B[ind, cols2]
+        diff_cols_zero_orig = [(dicts[:, i] == 0) for i in self.differenced_components]
+        diff_cols_zero_orig.append(np.repeat(True, dicts.shape[0]))
+        diff_cols_zero_orig = np.all(diff_cols_zero_orig, axis=0)
+        powers_undiff = np.vstack([np.sum(dicts_sig[np.ix_(cols, self.signature_indices[i])] * np.array(self.signature[i]), axis=1) for i in self.undiff_components])
+        undiff_cols_duplicates_orig = np.array([np.where(np.all([(dicts[diff_cols_zero_orig, k] == i) for k, i in zip(self.undiff_components, powers_undiff[:, j])], axis=0))[0][0] for j in range(powers_undiff.shape[1])])
 
+        for i in range(poly_B_sig.shape[0]):
+            lamb = ind_to_mult(i, dicts_sig)
+            lamb_tilde = np.array([np.sum(lamb[ind] * sig) for ind, sig in zip(self.signature_indices, self.signature)])
+            ind = mult_to_ind(lamb_tilde, dicts)
+            poly_B_sig[i, cols] = poly_B[ind, diff_cols_zero_orig][undiff_cols_duplicates_orig]
+        toc = time()
+        print(toc - tic)
+
+        return poly_B_sig
 
     def C(self, param, t):
         pass
 
-    def C_lim(self, param, order=None, wrt=None):
+    def C_lim(self, param, deriv_order=0, wrt=None):
         pass
 
     def Q(self, param, num):
         pass
 
-    def calc_filter_B(self, order):
+    def calc_filter_B(self, poly_order):
         if np.isnan(self.true_param).any():
             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
 
         if (self.filter_c4 is None) | (self.filter_C4 is None) | (self.filter_Y4 is None):
             raise Exception('Method setup_filter has to be called first.')
 
-        if order == 4:
+        if poly_order == 4:
             C = self.filter_C4
             c = self.filter_c4
             Y = self.filter_Y4
             filepath = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
-        elif order == 2:
+        elif poly_order == 2:
             C = self.filter_C2
             c = self.filter_c2
             Y = self.filter_Y2
@@ -371,22 +377,22 @@ class PolynomialModel:
             raise Exception('Argument order has to be 4 or 2.')
 
         k, d = C.shape
-        B = self.poly_B(param=self.true_param, order=order)
+        B = self.poly_B(param=self.true_param, poly_order=poly_order)
         if np.any(c):
             C = np.vstack((C, np.repeat(0, d)))
             Y = np.vstack((Y, np.repeat(0, k)))
             c = np.append(c, 1)[:, None]
             Y = np.hstack((Y, c))
             k += 1
-            t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order) + n_dim(d + k - 1, order), desc='Calculating S')
+            t = tqdm(total=2 * n_dim(k, poly_order) + n_dim(d + k, poly_order) + n_dim(d + k - 1, poly_order), desc='Calculating S')
         else:
-            t = tqdm(total=2 * n_dim(k, order) + n_dim(d + k, order), desc='Calculating S')
+            t = tqdm(total=2 * n_dim(k, poly_order) + n_dim(d + k, poly_order), desc='Calculating S')
 
-        dictd = return_dict(d, order)
-        dictk = return_dict(k, order)
+        dictd = return_dict(d, poly_order)
+        dictk = return_dict(k, poly_order)
 
-        B_large = np.zeros((n_dim(d + k, order), n_dim(d + k, order)))
-        dict_large = return_dict(d + k, order)
+        B_large = np.zeros((n_dim(d + k, poly_order), n_dim(d + k, poly_order)))
+        dict_large = return_dict(d + k, poly_order)
 
         def S_func(trans, order):
             dim1, dim2 = trans.shape
@@ -444,8 +450,8 @@ class PolynomialModel:
             S[0, 0] = 1
             return S
 
-        S_mat = S_func(Y, order)
-        S_mat_d = S_func(C, order)
+        S_mat = S_func(Y, poly_order)
+        S_mat_d = S_func(C, poly_order)
 
         t.set_description('Calculating B')
         for i in range(dict_large.shape[0]):
@@ -465,10 +471,10 @@ class PolynomialModel:
                 B_large[i, mu_loc] = np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
 
         if np.any(c):
-            B_final = np.zeros((n_dim(d + k - 1, order), n_dim(d + k - 1, order)))
-            dict_final = return_dict(d + k - 1, order)
+            B_final = np.zeros((n_dim(d + k - 1, poly_order), n_dim(d + k - 1, poly_order)))
+            dict_final = return_dict(d + k - 1, poly_order)
             t.set_description('Incorporating c')
-            for i in range(n_dim(d + k - 1, order)):
+            for i in range(n_dim(d + k - 1, poly_order)):
                 t.update(1)
                 lamb_ind = dict_final[i]
                 mu_inds, mu_locs = dict_final[mask(lamb_ind, dict_final, typ='leq_abs')], np.where(mask(lamb_ind, dict_final, typ='leq_abs'))[0]
@@ -478,11 +484,11 @@ class PolynomialModel:
             B_final = B_large
 
         t.set_description('Calculating limiting power expectations')
-        if order == 4:
+        if poly_order == 4:
             self.filter_B4 = B_final
             self.lim_expec4 = np.append(1, np.linalg.inv(np.eye(B_final.shape[0] - 1) - B_final[1:, 1:]) @ B_final[1:, 0])
             np.savetxt(filepath, self.filter_B4)
-        elif order == 2:
+        elif poly_order == 2:
             self.filter_B2 = B_final
             self.lim_expec2 = np.append(1, np.linalg.inv(np.eye(B_final.shape[0] - 1) - B_final[1:, 1:]) @ B_final[1:, 0])
             np.savetxt(filepath, self.filter_B2)
@@ -511,9 +517,9 @@ class PolynomialModel:
         self.kalman_filter.build_covariance()
 
         k = np.size(self.wrt)
-        a_0 = self.a(self.true_param, order=0)
-        a_1 = self.a(self.true_param, order=1, wrt=self.wrt)
-        a_2 = self.a(self.true_param, order=2, wrt=self.wrt)
+        a_0 = self.a(self.true_param, deriv_order=0)
+        a_1 = self.a(self.true_param, deriv_order=1, wrt=self.wrt)
+        a_2 = self.a(self.true_param, deriv_order=2, wrt=self.wrt)
         self.filter_c4 = np.append(a_0, a_1.flatten())
         self.filter_c2 = np.hstack((a_0, a_1.flatten(), a_2.flatten()))
 
@@ -535,20 +541,20 @@ class PolynomialModel:
         S_hat_o = np.einsum('ijk, ikl -> ijl', S_j[:, self.first_observed:, self.first_observed:], S_i_tilde) + np.einsum('ijk, ikl -> ijl', S_i[:, self.first_observed:, self.first_observed:], S_j_tilde)
         SS = (S[:, :, self.first_observed:] @ Sig_inv - Sig[:, self.first_observed:] @ S_tilde)
 
-        A_1 = (self.A(self.true_param, order=1, wrt=self.wrt) @ K_tilde + self.A(self.true_param) @ SS) @ self.kalman_filter.H
-        A_10 = self.A(self.true_param, order=1, wrt=self.wrt) @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - self.A(self.true_param) @ SS @ self.kalman_filter.H
+        A_1 = (self.A(self.true_param, deriv_order=1, wrt=self.wrt) @ K_tilde + self.A(self.true_param) @ SS) @ self.kalman_filter.H
+        A_10 = self.A(self.true_param, deriv_order=1, wrt=self.wrt) @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - self.A(self.true_param) @ SS @ self.kalman_filter.H
         A_11 = self.kalman_filter.F_lim
 
-        prod_i = np.einsum('ijk, lkm -> iljm', self.A(self.true_param, order=1, wrt=self.wrt), SS) @ self.kalman_filter.H
+        prod_i = np.einsum('ijk, lkm -> iljm', self.A(self.true_param, deriv_order=1, wrt=self.wrt), SS) @ self.kalman_filter.H
         prod_ij = (prod_i + np.transpose(prod_i, (1, 0, 2, 3)))[np.triu_indices(k)]
         M = R[:, :, self.first_observed:] @ Sig_inv - S_hat + np.einsum('jk, ikl -> ijl', K_tilde, S_hat_o) - np.einsum('jk, ikl, lm -> ijm', K_tilde, R[:, self.first_observed:, self.first_observed:], Sig_inv)
         N_i = np.einsum('jk, ikl -> ijl', Sig[:, self.first_observed:], S_i_tilde) - S_i[:, :, self.first_observed:] @ Sig_inv
         N_j = np.einsum('jk, ikl -> ijl', Sig[:, self.first_observed:], S_j_tilde) - S_j[:, :, self.first_observed:] @ Sig_inv
 
-        A_2 = self.A(self.true_param, order=2, wrt=self.wrt) @ K_tilde @ self.kalman_filter.H + prod_ij + self.A(self.true_param) @ M @ self.kalman_filter.H
-        A_20 = self.A(self.true_param, order=2, wrt=self.wrt) @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - prod_ij - self.A(self.true_param) @ M @ self.kalman_filter.H
-        A_21_i = self.A(self.true_param, order=1, wrt=self.wrt)[np.triu_indices(k)[0]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + self.A(self.true_param) @ N_i @ self.kalman_filter.H
-        A_21_j = self.A(self.true_param, order=1, wrt=self.wrt)[np.triu_indices(k)[1]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + self.A(self.true_param) @ N_j @ self.kalman_filter.H
+        A_2 = self.A(self.true_param, deriv_order=2, wrt=self.wrt) @ K_tilde @ self.kalman_filter.H + prod_ij + self.A(self.true_param) @ M @ self.kalman_filter.H
+        A_20 = self.A(self.true_param, deriv_order=2, wrt=self.wrt) @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - prod_ij - self.A(self.true_param) @ M @ self.kalman_filter.H
+        A_21_i = self.A(self.true_param, deriv_order=1, wrt=self.wrt)[np.triu_indices(k)[0]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + self.A(self.true_param) @ N_i @ self.kalman_filter.H
+        A_21_j = self.A(self.true_param, deriv_order=1, wrt=self.wrt)[np.triu_indices(k)[1]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + self.A(self.true_param) @ N_j @ self.kalman_filter.H
         A_22 = self.kalman_filter.F_lim
 
         self.filter_C4 = np.block([[A_0], [np.vstack(A_1)]])
@@ -572,14 +578,14 @@ class PolynomialModel:
             self.filter_B4 = np.loadtxt(filepath_B4)
             self.lim_expec4 = np.append(1, np.linalg.inv(np.eye(self.filter_B4.shape[0] - 1) - self.filter_B4[1:, 1:]) @ self.filter_B4[1:, 0])
         else:
-            self.calc_filter_B(order=4)
+            self.calc_filter_B(poly_order=4)
 
         filepath_B2 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
         if os.path.exists(filepath_B2):
             self.filter_B2 = np.loadtxt(filepath_B2)
             self.lim_expec2 = np.append(1, np.linalg.inv(np.eye(self.filter_B2.shape[0] - 1) - self.filter_B2[1:, 1:]) @ self.filter_B2[1:, 0])
         else:
-            self.calc_filter_B(order=2)
+            self.calc_filter_B(poly_order=2)
 
     def generate_observations(self, t_max, inter_steps, seed, verbose):
         pass
@@ -821,9 +827,9 @@ class PolynomialModel:
                 Gammaj[j, 2 * self.dim:, :] = Gammaj[j, :, 2 * self.dim:].T
             Gamma = 1 / 2 * Gammaj.reshape(k, Gammaj.shape[1]**2, order='F')
 
-            K_prime = self.A(param, order=1, wrt=wrt) @ kfilter.Sig_tp1_t_lim[:, self.first_observed:] @ Sig_inv + np.einsum('jk, ikl, lm -> ijm', self.A(param), s_star[:, :, self.first_observed:], Sig_inv) - np.einsum('jk, kl, lm, imn, nr -> ijr', self.A(param), kfilter.Sig_tp1_t_lim[:, self.first_observed:], Sig_inv, s_star[:, self.first_observed:, self.first_observed:], Sig_inv)
-            F_prime = self.A(param, order=1, wrt=wrt) - K_prime @ kfilter.H
-            a_hat = np.hstack((self.a(param), self.a(param), self.a(param, order=1, wrt=wrt).flatten()))
+            K_prime = self.A(param, deriv_order=1, wrt=wrt) @ kfilter.Sig_tp1_t_lim[:, self.first_observed:] @ Sig_inv + np.einsum('jk, ikl, lm -> ijm', self.A(param), s_star[:, :, self.first_observed:], Sig_inv) - np.einsum('jk, kl, lm, imn, nr -> ijr', self.A(param), kfilter.Sig_tp1_t_lim[:, self.first_observed:], Sig_inv, s_star[:, self.first_observed:, self.first_observed:], Sig_inv)
+            F_prime = self.A(param, deriv_order=1, wrt=wrt) - K_prime @ kfilter.H
+            a_hat = np.hstack((self.a(param), self.a(param), self.a(param, deriv_order=1, wrt=wrt).flatten()))
             A_hat = np.zeros((self.dim * (k + 2), self.dim * (k + 2)))
             A_hat[:self.dim, :self.dim] = self.A(param)
             A_hat[self.dim:2 * self.dim, :2 * self.dim] = np.hstack((kfilter.K_lim @ kfilter.H, kfilter.F_lim))
@@ -1142,72 +1148,70 @@ class HestonModel(PolynomialModel):
         elif wrt is not None:
             warnings.warn('Argument wrt was not used since the whole parameter has not yet been estimated. Please use method "setup_filter" after this has been done.', Warning)
 
-    def a(self, param, order=0, wrt=np.array([0, 1, 2, 3])):
+    def a(self, param, deriv_order=0, wrt=None):
         wrt = np.atleast_1d(wrt)
         kappa, theta, sigma, rho = param
-        if order == 0:
+        if deriv_order == 0:
             return np.array([theta * (1 - np.exp(-kappa * self.dt)), 0, theta * self.dt + theta / kappa * (np.exp(-kappa * self.dt) - 1)])
-        elif order == 1:
+        elif deriv_order == 1:
             deriv_array = np.zeros((4, 3))
             deriv_array[0] = [theta * self.dt * np.exp(-kappa * self.dt), 0, theta / kappa ** 2 * (1 - np.exp(-kappa * self.dt)) - theta / kappa * self.dt * np.exp(-kappa * self.dt)]
             deriv_array[1] = [1 - np.exp(-kappa * self.dt), 0, self.dt - 1 / kappa * (1 - np.exp(-kappa * self.dt))]
             return deriv_array[wrt]
-        elif order == 2:
+        elif deriv_order == 2:
             deriv_array = np.zeros((4, 4, 3))
             deriv_array[0, 0] = [-theta * self.dt ** 2 * np.exp(-kappa * self.dt), 0, theta / kappa * self.dt **2 * np.exp(-kappa * self.dt) + 2 * theta / kappa**2 * self.dt * np.exp(-kappa * self.dt) - 2 * theta / kappa**3 * (1 - np.exp(-kappa * self.dt))]
             deriv_array[0, 1] = [self.dt * np.exp(-kappa * self.dt), 0, 1 / kappa**2 * (1 - np.exp(-kappa * self.dt)) - 1 / kappa * self.dt * np.exp(-kappa * self.dt)]
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    def A(self, param, order=0, wrt=np.array([0, 1, 2, 3])):
+    def A(self, param, deriv_order=0, wrt=None):
         wrt = np.atleast_1d(wrt)
         kappa, theta, sigma, rho = param
-        if order == 0:
+        if deriv_order == 0:
             return np.array([[np.exp(-kappa * self.dt), 0, 0], [0, 0, 0], [1 / kappa * (1 - np.exp(-kappa * self.dt)), 0, 0]])
-        elif order == 1:
+        elif deriv_order == 1:
             deriv_array = np.zeros((4, 3, 3))
             deriv_array[0, :, 0] = [-self.dt * np.exp(-kappa * self.dt), 0, 1 / kappa**2 * (np.exp(-kappa * self.dt) - 1) + 1 / kappa * self.dt * np.exp(-kappa * self.dt)]
             return deriv_array[wrt]
-        elif order == 2:
+        elif deriv_order == 2:
             deriv_array = np.zeros((4, 4, 3, 3))
             deriv_array[0, 0, :, 0] = [self.dt **2 * np.exp(-kappa * self.dt), 0, 2 / kappa**3 * (1 - np.exp(-kappa * self.dt)) - 2 / kappa**2 * self.dt * np.exp(-kappa * self.dt) - 1 / kappa * self.dt ** 2 * np.exp(-kappa * self.dt)]
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    def poly_B(self, param, order):
+    def poly_A(self, param, poly_order, deriv_order=0, wrt=None):
+        wrt = np.atleast_1d(wrt)
         kappa, theta, sigma, rho = param
         mu, delta = 0, 0
-        dicts = return_dict(2, 2 * order)
+        dicts = return_dict(self.dim_c, poly_order)
 
-        heston_A = np.zeros((n_dim(2, 2 * order), n_dim(2, 2 * order)))
-        heston_A[mult_to_ind([1, 0], dicts), 0] = kappa * theta
-        heston_A[mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -kappa
-        heston_A[mult_to_ind([0, 1], dicts), 0] = mu
-        heston_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = delta
-        heston_A[mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = sigma ** 2
-        heston_A[mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = sigma * rho
-        heston_A[mult_to_ind([0, 2], dicts), mult_to_ind([1, 0], dicts)] = 1
-
-        heston_Bc = np.zeros(heston_A.shape)
-        for i in range(heston_A.shape[0]):
-            for j in range(heston_Bc.shape[0]):
-                masks = mask(dicts[i], dicts, typ='leq') & mask(dicts[j], dicts, typ='leq')
-                lamb_ell = (ind_to_mult(i, dicts) - dicts)[masks]
-                mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
-                heston_Bc[i, j] = (multi_binom(dicts[i], dicts[masks]) * heston_A[mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum()
-
-        heston_B = expm(heston_Bc * self.dt)
-
-        heston_B_diff_sq = np.zeros((n_dim(3, order), n_dim(3, order)))
-        dicts_sq = return_dict(3, order)
-        cols = np.where((dicts_sq[:, 1] == 0) & (dicts_sq[:, 2] == 0))[0]
-        cols2 = np.where((dicts[:, 1] == 0))[0][:cols.shape[0]]
-        for i in range(heston_B_diff_sq.shape[0]):
-            lamb = ind_to_mult(i, dicts_sq)
-            lamb_tilde = np.array([lamb[0], lamb[1] + 2 * lamb[2]])
-            ind = mult_to_ind(lamb_tilde, dicts)
-            heston_B_diff_sq[i, cols] = heston_B[ind, cols2]
-        return heston_B_diff_sq
+        if deriv_order == 0:
+            heston_A = np.zeros((n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
+            heston_A[mult_to_ind([1, 0], dicts), 0] = kappa * theta
+            heston_A[mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -kappa
+            heston_A[mult_to_ind([0, 1], dicts), 0] = mu
+            heston_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = delta
+            heston_A[mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = sigma ** 2
+            heston_A[mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = sigma * rho
+            heston_A[mult_to_ind([0, 2], dicts), mult_to_ind([1, 0], dicts)] = 1
+            return heston_A
+        elif deriv_order == 1:
+            heston_A = np.zeros((4, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
+            heston_A[0, mult_to_ind([1, 0], dicts), 0] = theta
+            heston_A[0, mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -1
+            heston_A[1, mult_to_ind([1, 0], dicts), 0] = kappa
+            heston_A[2, mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = 2 * sigma
+            heston_A[2, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = rho
+            heston_A[3, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = sigma
+            return heston_A[wrt]
+        elif deriv_order == 2:
+            heston_A = np.zeros((4, 4, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
+            heston_A[0, 1, mult_to_ind([1, 0], dicts), 0] = 1
+            heston_A[2, 2, mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = 2
+            heston_A[2, 3, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = 1
+            heston_A = heston_A[np.ix_(wrt, wrt)]
+            return heston_A[np.triu_indices(len(wrt))]
 
     def C(self, param, t):
         kappa, theta, sigma, rho = param
@@ -1221,10 +1225,10 @@ class HestonModel(PolynomialModel):
         B23 = 3 * rho * sigma / kappa ** 2 * ((v0 - theta) * np.exp(-kappa * t) - theta * np.exp(-kappa * self.dt)) * (np.exp(kappa * self.dt) - 1) - 3 * rho * sigma / kappa * (v0 - theta) * np.exp(-kappa * t) + 3 * rho * sigma / kappa * theta * self.dt
         return np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
 
-    def C_lim(self, param, order=0, wrt=np.array([0, 1, 2, 3])):
+    def C_lim(self, param, deriv_order=0, wrt=None):
         wrt = np.atleast_1d(wrt)
         kappa, theta, sigma, rho = param
-        if order == 0:
+        if deriv_order == 0:
             B11 = (1 - np.exp(-2 * kappa * self.dt)) * sigma ** 2 / (2 * kappa) * theta
             B13 = sigma ** 2 / (2 * kappa ** 2) * (1 + 4 * rho ** 2 - np.exp(-kappa * self.dt)) * theta * (1 - np.exp(-kappa * self.dt)) - 2 / kappa * rho ** 2 * sigma ** 2 * theta * self.dt * np.exp(-kappa * self.dt)
             B33 = -sigma ** 2 / (2 * kappa ** 3) * theta * (1 - np.exp(-kappa * self.dt)) ** 2 - 3 * sigma ** 2 / kappa ** 3 * theta * (1 + 8 * rho ** 2) * (1 - np.exp(-kappa * self.dt)) + 12 * sigma ** 2 / kappa ** 2 * rho ** 2 * theta * self.dt * (1 + np.exp(-kappa * self.dt)) + 3 * sigma ** 2 / kappa ** 2 * theta * self.dt + 2 * theta ** 2 * self.dt ** 2
@@ -1232,7 +1236,7 @@ class HestonModel(PolynomialModel):
             B12 = theta / kappa * rho * sigma * (1 - np.exp(-kappa * self.dt))
             B23 = 3 * rho * sigma / kappa ** 2 * theta * (np.exp(-kappa * self.dt) - 1) + 3 * rho * sigma / kappa * theta * self.dt
             return np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
-        elif order == 1:
+        elif deriv_order == 1:
             deriv_array = np.zeros((4, 3, 3))
             B11 = ((1 + 2 * kappa * self.dt) * np.exp(-2 * kappa * self.dt) - 1) / (2 * kappa**2) * sigma**2 * theta
             B12 = theta / kappa * rho * sigma * self.dt * np.exp(-kappa * self.dt) - theta / kappa**2 * rho * sigma * (1 - np.exp(-kappa * self.dt))
@@ -1266,7 +1270,7 @@ class HestonModel(PolynomialModel):
             B33 = -48 * sigma**2 / kappa**3 * rho * theta * (1 - np.exp(-kappa * self.dt)) + 24 * sigma**2 / kappa**2 * rho * theta * self.dt * (1 + np.exp(-kappa * self.dt))
             deriv_array[3] = np.array([[B11, B12, B13], [B12, B22, B23], [B13, B23, B33]])
             return deriv_array[wrt]
-        elif order == 2:
+        elif deriv_order == 2:
             deriv_array = np.zeros((4, 4, 3, 3))
 
             B11 = (1 - (1 + 2 * kappa * self.dt + 2 * kappa**2 * self.dt ** 2) * np.exp(-2 * kappa * self.dt)) / kappa**3 * sigma**2 * theta
@@ -1441,29 +1445,29 @@ class OUNIGModel(PolynomialModel):
         elif wrt is not None:
             warnings.warn('Argument wrt was not used since the whole parameter has not yet been estimated. Please use method "setup_filter" after this has been done.', Warning)
 
-    def a(self, param, order=0, wrt=np.array([0, 1, 2])):
+    def a(self, param, deriv_order=0, wrt=None):
         wrt = np.atleast_1d(wrt)
-        if order == 0:
+        if deriv_order == 0:
             return np.zeros(2)
-        elif order == 1:
+        elif deriv_order == 1:
             deriv_array = np.zeros((3, 2))
             return deriv_array[wrt]
-        elif order == 2:
+        elif deriv_order == 2:
             deriv_array = np.zeros((3, 3, 2))
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    def A(self, param, order=0, wrt=np.array([0, 1, 2])):
+    def A(self, param, deriv_order=0, wrt=None):
         wrt = np.atleast_1d(wrt)
         lamb, kappa, delta = param
-        if order == 0:
+        if deriv_order == 0:
             return np.array([[np.exp(-lamb * self.dt), 0], [kappa * (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa), np.exp(-kappa * self.dt)]])
-        elif order == 1:
+        elif deriv_order == 1:
             deriv_array = np.zeros((3, 2, 2))
             deriv_array[0] = np.array([[-self.dt * np.exp(-lamb * self.dt), 0], [self.dt * kappa * np.exp(-lamb * self.dt) / (lamb - kappa) + kappa * (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa)**2, 0]])
             deriv_array[1] = np.array([[0, 0], [((1 - self.dt * kappa) * np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) + kappa * (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa)**2, -self.dt * np.exp(-kappa * self.dt)]])
             return deriv_array[wrt]
-        elif order == 2:
+        elif deriv_order == 2:
             deriv_array = np.zeros((3, 3, 2, 2))
             A_lamb_lamb = np.array([[self.dt ** 2 * np.exp(-lamb * self.dt), 0], [2 * kappa * (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa)**3 - 2 * self.dt * kappa * np.exp(-lamb * self.dt) / (lamb - kappa)**2 - self.dt ** 2 * kappa * np.exp(-lamb * self.dt) / (lamb - kappa), 0]])
             A_lamb_kappa = np.array([[0, 0], [self.dt * (lamb * np.exp(-lamb * self.dt) + kappa * np.exp(-kappa * self.dt)) / (lamb - kappa)**2 + (lamb + kappa) / (lamb - kappa)**3 * (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)), 0]])
@@ -1476,12 +1480,12 @@ class OUNIGModel(PolynomialModel):
             deriv_array = deriv_array[np.ix_(wrt, wrt)]
             return deriv_array[np.triu_indices(len(wrt))]
 
-    def poly_B(self, param, order):
+    def poly_B(self, param, poly_order):
         lamb, kappa, delta = param
-        dicts = return_dict(2, order)
+        dicts = return_dict(2, poly_order)
         alpha = 1
 
-        OU_A = np.zeros((n_dim(2, order), n_dim(2, order)))
+        OU_A = np.zeros((n_dim(2, poly_order), n_dim(2, poly_order)))
         OU_A[mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -lamb
         OU_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = kappa
         OU_A[mult_to_ind([0, 1], dicts), mult_to_ind([0, 1], dicts)] = -kappa
@@ -1513,17 +1517,17 @@ class OUNIGModel(PolynomialModel):
         B22 = np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa))**2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa**2 * psi**2
         return (delta / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
 
-    def C_lim(self, param, order=0, wrt=np.array([0, 1, 2])):
+    def C_lim(self, param, deriv_order=0, wrt=None):
         wrt = np.atleast_1d(wrt)
         lamb, kappa, delta = param
         alpha = 1
         psi = (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) + np.exp(-kappa * self.dt) / (lamb + kappa)
-        if order == 0:
+        if deriv_order == 0:
             B11 = 1 - np.exp(-2 * lamb * self.dt)
             B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb * self.dt) * psi
             B22 = np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2
             return (delta / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
-        elif order == 1:
+        elif deriv_order == 1:
             psi_l = self.dt * np.exp(-lamb * self.dt) / (lamb - kappa) + (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa) ** 2 - np.exp(-kappa * self.dt) / (lamb + kappa) ** 2
             psi_k = (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) ** 2 - 2 * self.dt * np.exp(-kappa * self.dt) * lamb / (lamb ** 2 - kappa ** 2) - np.exp(-kappa * self.dt) / (lamb + kappa) ** 2
 
@@ -1544,7 +1548,7 @@ class OUNIGModel(PolynomialModel):
             deriv_array[2] = (1 / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
 
             return deriv_array[wrt]
-        elif order == 2:
+        elif deriv_order == 2:
             psi_l = self.dt * np.exp(-lamb * self.dt) / (lamb - kappa) + (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa) ** 2 - np.exp(-kappa * self.dt) / (lamb + kappa) ** 2
             psi_k = (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) ** 2 - 2 * self.dt * np.exp(-kappa * self.dt) * lamb / (lamb ** 2 - kappa ** 2) - np.exp(-kappa * self.dt) / (lamb + kappa) ** 2
             psi_ll = self.dt * ((kappa - lamb) * self.dt - 2) * np.exp(-lamb * self.dt) / (lamb - kappa) ** 2 - 2 * (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa) ** 3 + 2 * np.exp(-kappa * self.dt) / (lamb + kappa) ** 3
@@ -1649,7 +1653,13 @@ init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 ## Test the new restructuring #1 (Simulation study, no observations needed)
-heston = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=1)
+heston = HestonModel(first_observed=1, init=init, dt=1, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=None)
+B = heston.poly_B(heston.true_param, poly_order=1)
+tic = time()
+heston.C_lim(heston.true_param)
+toc=time()
+print(toc - tic)
+
 V, Std, Corr = heston.compute_V()
 ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=2)
 V, Std, Corr = ou.compute_V()

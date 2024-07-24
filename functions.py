@@ -225,8 +225,8 @@ class InitialDistribution:
 
 def check_derivatives_BB(model, h):
     BB = model.C_lim(model.true_param)
-    BB_deriv = model.C_lim(model.true_param, order=1)
-    BB_deriv2 = model.C_lim(model.true_param, order=2)
+    BB_deriv = model.C_lim(model.true_param, deriv_order=1)
+    BB_deriv2 = model.C_lim(model.true_param, deriv_order=2)
 
     if model.__class__.__name__ == 'HestonModel':
         E_X = model.lim_expec2[1:4]
