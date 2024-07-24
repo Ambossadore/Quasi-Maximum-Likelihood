@@ -6,7 +6,7 @@ from functools import partial
 from itertools import product, compress
 from time import time
 
-from scipy.linalg import expm
+from scipy.linalg import expm, expm_frechet
 from scipy.optimize import minimize
 from scipy.special import factorial
 from tqdm import tqdm, trange
@@ -307,26 +307,45 @@ class PolynomialModel:
         pass
 
     def poly_A(self, param, poly_order, deriv_order=0, wrt=None):
-        pass
+        poly_B = self.poly_B(param, poly_order, deriv_order, wrt)
 
-    def poly_B(self, param, poly_order):
-        tic = time()
-        poly_A = self.poly_A(param, max(sum(self.signature, [])) * poly_order)
+
+    def poly_B(self, param, poly_order, deriv_order=0, wrt=None):
+        wrt = np.atleast_1d(wrt)
+        k = np.size(wrt)
+        poly_A = self.poly_A(param, max(sum(self.signature, [])) * poly_order, deriv_order, wrt)
 
         dicts = return_dict(self.dim_c, max(sum(self.signature, [])) * poly_order)
-        poly_B_gen = np.zeros((n_dim(self.dim_c, max(sum(self.signature, [])) * poly_order), n_dim(self.dim_c, max(sum(self.signature, [])) * poly_order)))
-        for i in trange(poly_B_gen.shape[0]):
-            for j in range(poly_B_gen.shape[1]):
+        poly_B_gen = np.zeros_like(poly_A)
+        for i in range(poly_B_gen.shape[-2]):
+            for j in range(poly_B_gen.shape[-1]):
                 masks = mask(dicts[i], dicts, typ='leq') & mask(dicts[j], dicts, typ='leq')
                 lamb_ell = (ind_to_mult(i, dicts) - dicts)[masks]
                 mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
-                poly_B_gen[i, j] = (multi_binom(dicts[i], dicts[masks]) * poly_A[mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum()
+                poly_B_gen[..., i, j] = (multi_binom(dicts[i], dicts[masks]) * poly_A[..., mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum(axis=-1)
 
-        poly_B = expm(poly_B_gen * self.dt)
+        if deriv_order == 0:
+            poly_B = expm(poly_B_gen * self.dt)
+            poly_B_sig = np.zeros((n_dim(self.dim, poly_order), n_dim(self.dim, poly_order)))
+        if deriv_order >= 1:
+            poly_B = np.zeros_like(poly_B_gen)
+            for i in range(k):
+                expon, deriv = expm_frechet(poly_B_gen[0] * self.dt, poly_B_gen[1 + i] * self.dt)
+                poly_B[1 + i] = deriv
+            poly_B[0] = expon
+            poly_B_sig = np.zeros((poly_B.shape[0], n_dim(self.dim, poly_order), n_dim(self.dim, poly_order)))
+        if deriv_order == 2:
+            first_frechet = np.array([expm_frechet(poly_B_gen[0] * self.dt, poly_B_gen[1 + k + i] * self.dt, compute_expm=False) for i in range(int(k * (k + 1) / 2))])
 
-        poly_B_sig = np.zeros((n_dim(self.dim, poly_order), n_dim(self.dim, poly_order)))
+            E1_indices, E2_indices = np.triu_indices(k)
+            E1 = poly_B_gen[1 + E1_indices] * self.dt
+            E2 = poly_B_gen[1 + E2_indices] * self.dt
+            X1 = np.kron(np.eye(2), poly_B_gen[0] * self.dt) + np.kron(np.array([[0, 1], [0, 0]]), E1)
+            X2 = np.kron(np.eye(2), X1) + np.kron(np.array([[0, 1], [0, 0]]), np.kron(np.eye(2), E2))
+            second_frechet = expm(X2)[:, :poly_B.shape[-2], -poly_B.shape[-1]:]
+            poly_B[(k + 1):] = first_frechet + second_frechet
+
         dicts_sig = return_dict(self.dim, poly_order)
-
         diff_cols_zero = np.all([(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]], axis=0)
         undiff_cols_duplicates = np.all([(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]], axis=0)
         cols = np.where(diff_cols_zero & undiff_cols_duplicates)[0]
@@ -337,15 +356,18 @@ class PolynomialModel:
         powers_undiff = np.vstack([np.sum(dicts_sig[np.ix_(cols, self.signature_indices[i])] * np.array(self.signature[i]), axis=1) for i in self.undiff_components])
         undiff_cols_duplicates_orig = np.array([np.where(np.all([(dicts[diff_cols_zero_orig, k] == i) for k, i in zip(self.undiff_components, powers_undiff[:, j])], axis=0))[0][0] for j in range(powers_undiff.shape[1])])
 
-        for i in range(poly_B_sig.shape[0]):
+        for i in range(n_dim(self.dim, poly_order)):
             lamb = ind_to_mult(i, dicts_sig)
             lamb_tilde = np.array([np.sum(lamb[ind] * sig) for ind, sig in zip(self.signature_indices, self.signature)])
             ind = mult_to_ind(lamb_tilde, dicts)
-            poly_B_sig[i, cols] = poly_B[ind, diff_cols_zero_orig][undiff_cols_duplicates_orig]
-        toc = time()
-        print(toc - tic)
+            poly_B_sig[..., i, cols] = poly_B[..., ind, diff_cols_zero_orig][..., undiff_cols_duplicates_orig]
 
-        return poly_B_sig
+        if deriv_order == 0:
+            return poly_B_sig
+        elif deriv_order == 1:
+            return [poly_B_sig[0], poly_B_sig[1:]]
+        else:
+            return [poly_B_sig[0], poly_B_sig[1:(k + 1)], poly_B_sig[k + 1:]]
 
     def C(self, param, t):
         pass
@@ -1185,33 +1207,35 @@ class HestonModel(PolynomialModel):
         kappa, theta, sigma, rho = param
         mu, delta = 0, 0
         dicts = return_dict(self.dim_c, poly_order)
+        k = np.size(wrt)
+        n_components = 1 + k * (deriv_order >= 1) + int(k * (k + 1) / 2) * (deriv_order == 2)
 
-        if deriv_order == 0:
-            heston_A = np.zeros((n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
-            heston_A[mult_to_ind([1, 0], dicts), 0] = kappa * theta
-            heston_A[mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -kappa
-            heston_A[mult_to_ind([0, 1], dicts), 0] = mu
-            heston_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = delta
-            heston_A[mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = sigma ** 2
-            heston_A[mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = sigma * rho
-            heston_A[mult_to_ind([0, 2], dicts), mult_to_ind([1, 0], dicts)] = 1
-            return heston_A
-        elif deriv_order == 1:
-            heston_A = np.zeros((4, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
-            heston_A[0, mult_to_ind([1, 0], dicts), 0] = theta
-            heston_A[0, mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -1
-            heston_A[1, mult_to_ind([1, 0], dicts), 0] = kappa
-            heston_A[2, mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = 2 * sigma
-            heston_A[2, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = rho
-            heston_A[3, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = sigma
-            return heston_A[wrt]
-        elif deriv_order == 2:
-            heston_A = np.zeros((4, 4, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
-            heston_A[0, 1, mult_to_ind([1, 0], dicts), 0] = 1
-            heston_A[2, 2, mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = 2
-            heston_A[2, 3, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = 1
-            heston_A = heston_A[np.ix_(wrt, wrt)]
-            return heston_A[np.triu_indices(len(wrt))]
+        heston_A = np.zeros((n_components, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
+        heston_A[0, mult_to_ind([1, 0], dicts), 0] = kappa * theta
+        heston_A[0, mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -kappa
+        heston_A[0, mult_to_ind([0, 1], dicts), 0] = mu
+        heston_A[0, mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = delta
+        heston_A[0, mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = sigma ** 2
+        heston_A[0, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = sigma * rho
+        heston_A[0, mult_to_ind([0, 2], dicts), mult_to_ind([1, 0], dicts)] = 1
+
+        if deriv_order >= 1:
+            deriv_A = np.zeros((4, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
+            deriv_A[0, mult_to_ind([1, 0], dicts), 0] = theta
+            deriv_A[0, mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -1
+            deriv_A[1, mult_to_ind([1, 0], dicts), 0] = kappa
+            deriv_A[2, mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = 2 * sigma
+            deriv_A[2, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = rho
+            deriv_A[3, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = sigma
+            heston_A[1:(1 + k)] = deriv_A[wrt]
+        if deriv_order == 2:
+            deriv2_A = np.zeros((4, 4, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
+            deriv2_A[0, 1, mult_to_ind([1, 0], dicts), 0] = 1
+            deriv2_A[2, 2, mult_to_ind([2, 0], dicts), mult_to_ind([1, 0], dicts)] = 2
+            deriv2_A[2, 3, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = 1
+            deriv2_A = deriv2_A[np.ix_(wrt, wrt)]
+            heston_A[(1 + k):] = deriv2_A[np.triu_indices(len(wrt))]
+        return heston_A.squeeze()
 
     def C(self, param, t):
         kappa, theta, sigma, rho = param
@@ -1654,7 +1678,8 @@ init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
 
 ## Test the new restructuring #1 (Simulation study, no observations needed)
 heston = HestonModel(first_observed=1, init=init, dt=1, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=None)
-B = heston.poly_B(heston.true_param, poly_order=1)
+# B = heston.poly_B(heston.true_param, poly_order=1)
+B = heston.poly_B(heston.true_param, poly_order=1, deriv_order=2, wrt=np.array([0, 1, 2, 3]))
 tic = time()
 heston.C_lim(heston.true_param)
 toc=time()
