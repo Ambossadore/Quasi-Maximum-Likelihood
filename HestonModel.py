@@ -300,9 +300,6 @@ class PolynomialModel:
         for path in paths:
             Path(path).mkdir(parents=True, exist_ok=True)
 
-    def a(self, param, deriv_order=0, wrt=None):
-        pass
-
     def state_space_params(self, param, deriv_order=0, wrt=None):
         wrt = np.atleast_1d(wrt)
         k = np.size(wrt)
@@ -419,12 +416,6 @@ class PolynomialModel:
             return [poly_B_sig[0], poly_B_sig[1:]]
         else:
             return [poly_B_sig[0], poly_B_sig[1:(k + 1)], poly_B_sig[k + 1:]]
-
-    def C(self, param, t):
-        pass
-
-    def C_lim(self, param, deriv_order=0, wrt=None):
-        pass
 
     def Q(self, param, num):
         pass
