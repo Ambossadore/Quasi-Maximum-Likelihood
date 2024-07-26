@@ -6,6 +6,7 @@ from functools import partial
 from itertools import product, compress
 from time import time
 
+import numpy as np
 from scipy.linalg import expm, expm_frechet
 from scipy.optimize import minimize
 from scipy.special import factorial
@@ -15,12 +16,11 @@ from functions import *
 
 
 class KalmanFilter:
-    def __init__(self, dim, a, A, C, E_0, Cov_0, C_lim=None, first_observed=0):
+    def __init__(self, dim, a, A, C, E_0, Cov_0, first_observed=0):
         self.dim = dim
         self.a = a
         self.A = A
         self.C = C
-        self.C_lim = C_lim
         self.E_0 = E_0
         self.Cov_0 = Cov_0
         self.first_observed = first_observed
@@ -40,11 +40,11 @@ class KalmanFilter:
         Cov_0 = self.Cov_0()
         Sig_tp1_t_list = [Cov_0]
         Sig_tt_list = [Cov_0 - Cov_0[:, self.first_observed:] @ np.linalg.pinv(Cov_0[self.first_observed:, self.first_observed:]) @ Cov_0[:, self.first_observed:].T]
-        Sig_tp1_t_list.append(self.A() @ Sig_tt_list[0] @ self.A().T + self.C(t=1))
+        Sig_tp1_t_list.append(self.A[0] @ Sig_tt_list[0] @ self.A[0].T + self.C[0])
         Sig_tp1_t = Sig_tp1_t_list[-1]
         for t in range(1, t_max):
             Sig_tt = Sig_tp1_t - Sig_tp1_t[:, self.first_observed:] @ np.linalg.inv(Sig_tp1_t[self.first_observed:, self.first_observed:]) @ Sig_tp1_t[:, self.first_observed:].T
-            Sig_tp1_t = self.A() @ Sig_tt @ self.A().T + self.C(t=t + 1)
+            Sig_tp1_t = self.A[0] @ Sig_tt @ self.A[0].T + self.C[0]
             if np.isclose(Sig_tp1_t, Sig_tp1_t_list[-1], rtol=1e-7, atol=1e-7).all():
                 break
             Sig_tp1_t_list.append(Sig_tp1_t)
@@ -55,19 +55,24 @@ class KalmanFilter:
         self.Sig_tt_list = np.stack(Sig_tt_list)
         self.Sig_tp1_t_lim = Sig_tp1_t_list[-1]
         self.Sig_tt_lim = Sig_tt_list[-1]
-        self.K_lim = self.A() @ self.Sig_tp1_t_lim[:, self.first_observed:] @ np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
-        self.F_lim = self.A() - self.K_lim @ self.H
+        self.K_lim = self.A[0] @ self.Sig_tp1_t_lim[:, self.first_observed:] @ np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
+        self.F_lim = self.A[0] - self.K_lim @ self.H
 
     def S_star(self, wrt):
-        BB_lim_partial = self.C_lim(wrt=wrt, order=1)
-        right_side = np.einsum('jk, kl, lmi -> ijm', self.A(), self.Sig_tt_lim, self.A(wrt=wrt, order=1).T) + np.einsum('ijk, kl, lm -> ijm', self.A(wrt=wrt, order=1), self.Sig_tt_lim, self.A().T) + BB_lim_partial
+        wrt = np.atleast_1d(wrt)
+        BB_lim_partial = self.C[1 + wrt]
+        right_side = np.einsum('jk, kl, lmi -> ijm', self.A[0], self.Sig_tt_lim, self.A[1 + wrt].T) + np.einsum('ijk, kl, lm -> ijm', self.A[1 + wrt], self.Sig_tt_lim, self.A[0].T) + BB_lim_partial
         S_star_vectorized = (np.linalg.inv(np.eye(self.dim ** 2) - np.kron(self.F_lim, self.F_lim)) @ right_side.reshape(np.size(wrt), self.dim**2, order='F').T).T
         return S_star_vectorized.reshape(np.size(wrt), self.dim, self.dim, order='F')
 
     def R_star(self, wrt):
-        BB_lim_partial2 = self.C_lim(wrt=wrt, order=2)
-        partial_A_i = self.A(wrt=wrt, order=1)[np.triu_indices(np.size(wrt))[0]]
-        partial_A_j = self.A(wrt=wrt, order=1)[np.triu_indices(np.size(wrt))[1]]
+        wrt = np.atleast_1d(wrt)
+        k = int(np.sqrt(9 / 4 + 2 * (self.a.shape[0] - 1)) - 3 / 2)
+        wrt2 = np.where(np.isin(np.triu_indices(k)[0], wrt) & np.isin(np.triu_indices(k)[1], wrt))[0]
+
+        BB_lim_partial2 = self.C[1 + k + wrt2]
+        partial_A_i = self.A[1 + wrt][np.triu_indices(np.size(wrt))[0]]
+        partial_A_j = self.A[1 + wrt][np.triu_indices(np.size(wrt))[1]]
         s_star_i = self.S_star(wrt=wrt)[np.triu_indices(np.size(wrt))[0]]
         s_star_j = self.S_star(wrt=wrt)[np.triu_indices(np.size(wrt))[1]]
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
@@ -80,9 +85,9 @@ class KalmanFilter:
         s_star_j_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star_j[:, self.first_observed:, self.first_observed:], Sig_inv)
         s_hat = np.einsum('ijk, ikl -> ijl', s_star_j[:, :, self.first_observed:], s_star_i_tilde) + np.einsum('ijk, ikl -> ijl', s_star_i[:, :, self.first_observed:], s_star_j_tilde)
         s_hat_o = np.einsum('ijk, ikl -> ijl', s_star_j[:, self.first_observed:, self.first_observed:], s_star_i_tilde) + np.einsum('ijk, ikl -> ijl', s_star_i[:, self.first_observed:, self.first_observed:], s_star_j_tilde)
-        r_tilde = np.einsum('ijk, kl, lmi -> ijm', partial_A_i, self.Sig_tt_lim, partial_A_j.T) + np.einsum('jk, ikl, lmi -> ijm', self.A(), s_star_i_tt, partial_A_j.T) + np.einsum('jk, ikl, lmi -> ijm', self.A(), s_star_j_tt, partial_A_i.T) + np.einsum('jk, kl, ilm -> ijm', self.A(), self.Sig_tt_lim, self.A(wrt=wrt, order=2))
+        r_tilde = np.einsum('ijk, kl, lmi -> ijm', partial_A_i, self.Sig_tt_lim, partial_A_j.T) + np.einsum('jk, ikl, lmi -> ijm', self.A[0], s_star_i_tt, partial_A_j.T) + np.einsum('jk, ikl, lmi -> ijm', self.A[0], s_star_j_tt, partial_A_i.T) + np.einsum('jk, kl, ilm -> ijm', self.A[0], self.Sig_tt_lim, self.A[1 + k + wrt2])
         r_bar = np.einsum('ijk, kl -> ijl', s_hat, self.Sig_tp1_t_lim[:, self.first_observed:].T) - np.einsum('ijk, kl, lmi -> ijm', s_star_j[:, :, self.first_observed:], Sig_inv, s_star_i[:, :, self.first_observed:].T)
-        right_side = sym(r_tilde) - np.einsum('jk, ikl, lm, mn -> ijn', self.K_lim, s_hat_o, self.Sig_tp1_t_lim[:, self.first_observed:].T, self.A().T) + np.einsum('jk, ikl, lm -> ijm', self.A(), sym(r_bar), self.A().T) + BB_lim_partial2
+        right_side = sym(r_tilde) - np.einsum('jk, ikl, lm, mn -> ijn', self.K_lim, s_hat_o, self.Sig_tp1_t_lim[:, self.first_observed:].T, self.A[0].T) + np.einsum('jk, ikl, lm -> ijm', self.A[0], sym(r_bar), self.A[0].T) + BB_lim_partial2
         R_star_vectorized = (np.linalg.inv(np.eye(self.dim ** 2) - np.kron(self.F_lim, self.F_lim)) @ right_side.reshape(BB_lim_partial2.shape[0], self.dim**2, order='F').T).T
         return R_star_vectorized.reshape(BB_lim_partial2.shape[0], self.dim, self.dim, order='F')
 
@@ -94,7 +99,7 @@ class KalmanFilter:
         observations = observations[:, self.first_observed:]
         X_hat_tp1_t_list = [self.E_0()]
         X_hat_tt_list = [self.E_0() + self.Cov_0()[:, self.first_observed:] @ np.linalg.pinv(self.Cov_0()[self.first_observed:, self.first_observed:]) @ (observations[0] - self.E_0()[self.first_observed:])]
-        X_hat_tp1_t_list.append(self.a() + self.A() @ X_hat_tt_list[0])
+        X_hat_tp1_t_list.append(self.a[0] + self.A[0] @ X_hat_tt_list[0])
         X_hat_tp1_t = X_hat_tp1_t_list[-1]
         t_conv = self.Sig_tp1_t_list.shape[0]
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_list[1:, self.first_observed:, self.first_observed:])
@@ -109,14 +114,14 @@ class KalmanFilter:
             tr.update(1)
         for t in range(1, t_conv):
             X_hat_tt = X_hat_tp1_t + Sig_tp1_t_list_o[t, :, :] @ Sig_inv[t - 1] @ (observations[t] - X_hat_tp1_t[self.first_observed:])
-            X_hat_tp1_t = self.a() + self.A() @ X_hat_tt
+            X_hat_tp1_t = self.a[0] + self.A[0] @ X_hat_tt
             X_hat_tp1_t_list.append(X_hat_tp1_t)
             X_hat_tt_list.append(X_hat_tt)
             if verbose:
                 tr.update(1)
         for t in range(t_conv, t_max):
             X_hat_tt = X_hat_tp1_t + self.Sig_tp1_t_lim[:, self.first_observed:] @ Sig_inv[-1] @ (observations[t] - X_hat_tp1_t[self.first_observed:])
-            X_hat_tp1_t = self.a() + self.A() @ X_hat_tt
+            X_hat_tp1_t = self.a[0] + self.A[0] @ X_hat_tt
             X_hat_tp1_t_list.append(X_hat_tp1_t)
             X_hat_tt_list.append(X_hat_tt)
             if verbose:
@@ -126,7 +131,7 @@ class KalmanFilter:
         self.X_hat_tp1_t_list = np.stack(X_hat_tp1_t_list)
         self.X_hat_tt_list = np.stack(X_hat_tt_list)
 
-    def build_kalman_filter_hom(self, observations, t_max=None, verbose=0, close_pb=True):
+    def build_kalman_filter_hom(self, observations, t_max=None, verbose=0, close_pb=True):  # TODO: Refactor "hom" method into normal methods
         if t_max is None:
             t_max = observations.shape[0]
         if self.Sig_tp1_t_lim is None:
@@ -134,7 +139,7 @@ class KalmanFilter:
         observations = observations[:, self.first_observed:]
         X_hat_tp1_t_list_hom = [self.E_0()]
         X_hat_tt_list_hom = [self.E_0() + self.Sig_tp1_t_lim[:, self.first_observed:] @ np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:]) @ (observations[0] - self.E_0()[self.first_observed:])]
-        X_hat_tp1_t_list_hom.append(self.a() + self.A() @ X_hat_tt_list_hom[0])
+        X_hat_tp1_t_list_hom.append(self.a[0] + self.A[0] @ X_hat_tt_list_hom[0])
         X_hat_tp1_t = X_hat_tp1_t_list_hom[-1]
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
         Sig_tp1_t_lim_o = self.Sig_tp1_t_lim[:, self.first_observed:]
@@ -148,7 +153,7 @@ class KalmanFilter:
             tr.update(1)
         for t in range(1, t_max):
             X_hat_tt = X_hat_tp1_t + Sig_tp1_t_lim_o @ Sig_inv @ (observations[t] - X_hat_tp1_t[self.first_observed:])
-            X_hat_tp1_t = self.a() + self.A() @ X_hat_tt
+            X_hat_tp1_t = self.a[0] + self.A[0] @ X_hat_tt
             X_hat_tp1_t_list_hom.append(X_hat_tp1_t)
             X_hat_tt_list_hom.append(X_hat_tt)
             if verbose:
@@ -159,18 +164,19 @@ class KalmanFilter:
         self.X_hat_tt_list_hom = np.stack(X_hat_tt_list_hom)
 
     def deriv_filter_hom(self, observations, wrt, t_max=None, verbose=0, close_pb=True):
+        wrt = np.atleast_1d(wrt)
         if t_max is None:
             t_max = observations.shape[0]
         s_star = self.S_star(wrt=wrt)
-        partial_a = self.a(wrt=wrt, order=1)
-        partial_A = self.A(wrt=wrt, order=1)
+        partial_a = self.a[1 + wrt]
+        partial_A = self.A[1 + wrt]
         observations = observations[:, self.first_observed:]
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
         s_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star[:, self.first_observed:, self.first_observed:], Sig_inv)
         k_tilde = self.Sig_tp1_t_lim[:, self.first_observed:] @ Sig_inv
         V_tp1_t_list = [self.E_0(order=1, wrt=wrt)]
         V_tt_list = [self.E_0(order=1, wrt=wrt) + (s_star[:, :, self.first_observed:] @ Sig_inv - np.einsum('jk, ikl -> ijl', self.Sig_tp1_t_lim[:, self.first_observed:], s_tilde)) @ (observations[0] - self.X_hat_tp1_t_list_hom[0, self.first_observed:]) - np.einsum('jk, ik -> ij', k_tilde, self.E_0(order=1, wrt=wrt)[:, self.first_observed:])]
-        V_tp1_t_list.append(partial_a + partial_A @ self.X_hat_tt_list_hom[0] + np.einsum('jk, ik -> ij', self.A(), V_tt_list[0]))
+        V_tp1_t_list.append(partial_a + partial_A @ self.X_hat_tt_list_hom[0] + np.einsum('jk, ik -> ij', self.A[0], V_tt_list[0]))
         V_tp1_t = V_tp1_t_list[-1]
         if isinstance(verbose, tqdm):
             tr = verbose
@@ -182,7 +188,7 @@ class KalmanFilter:
             tr.update(1)
         for t in range(1, t_max):
             V_tt = V_tp1_t + (s_star[:, :, self.first_observed:] @ Sig_inv - np.einsum('jk, ikl -> ijl', self.Sig_tp1_t_lim[:, self.first_observed:], s_tilde)) @ (observations[t] - self.X_hat_tp1_t_list_hom[t, self.first_observed:]) - np.einsum('jk, ik -> ij', k_tilde, V_tp1_t[:, self.first_observed:])
-            V_tp1_t = partial_a + partial_A @ self.X_hat_tt_list_hom[t] + np.einsum('jk, ik -> ij', self.A(), V_tt)
+            V_tp1_t = partial_a + partial_A @ self.X_hat_tt_list_hom[t] + np.einsum('jk, ik -> ij', self.A[0], V_tt)
             V_tp1_t_list.append(V_tp1_t)
             V_tt_list.append(V_tt)
             if verbose:
@@ -192,6 +198,10 @@ class KalmanFilter:
         return np.stack(V_tp1_t_list), np.stack(V_tt_list)
 
     def deriv2_filter_hom(self, observations, wrt, t_max=None, verbose=0, close_pb=True, deriv_filters=None):
+        wrt = np.atleast_1d(wrt)
+        k = int(np.sqrt(9 / 4 + 2 * (self.a.shape[0] - 1)) - 3 / 2)
+        wrt2 = np.where(np.isin(np.triu_indices(k)[0], wrt) & np.isin(np.triu_indices(k)[1], wrt))[0]
+
         if t_max is None:
             t_max = observations.shape[0]
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
@@ -204,10 +214,10 @@ class KalmanFilter:
         s_hat_o = np.einsum('ijk, ikl -> ijl', s_star_j[:, self.first_observed:, self.first_observed:], s_star_i_tilde) + np.einsum('ijk, ikl -> ijl', s_star_i[:, self.first_observed:, self.first_observed:], s_star_j_tilde)
 
         r_star = self.R_star(wrt=wrt)
-        partial_a = self.a(wrt=wrt, order=2)
-        partial_A = self.A(wrt=wrt, order=2)
-        partial_A_i = self.A(wrt=wrt, order=1)[np.triu_indices(np.size(wrt))[0]]
-        partial_A_j = self.A(wrt=wrt, order=1)[np.triu_indices(np.size(wrt))[1]]
+        partial_a = self.a[1 + k + wrt2]
+        partial_A = self.A[1 + k + wrt2]
+        partial_A_i = self.A[1 + wrt][np.triu_indices(np.size(wrt))[0]]
+        partial_A_j = self.A[1 + wrt][np.triu_indices(np.size(wrt))[1]]
         if deriv_filters is not None:
             V_tp1_t, V_tt = deriv_filters
         else:
@@ -223,7 +233,7 @@ class KalmanFilter:
 
         W_tp1_t_list = [self.E_0(order=2, wrt=wrt)]
         W_tt_list = [W_tp1_t_list[0] + M @ (observations[0] - self.X_hat_tp1_t_list_hom[0, self.first_observed:]) + np.einsum('ijk, ik -> ij', N_j, V_tp1_t_i[0, :, self.first_observed:]) + np.einsum('ijk, ik -> ij', N_i, V_tp1_t_j[0, :, self.first_observed:]) - np.einsum('jk, ik -> ij', k_tilde, W_tp1_t_list[0][:, self.first_observed:])]
-        W_tp1_t_list.append(partial_a + partial_A @ self.X_hat_tt_list_hom[0] + np.einsum('ijk, ik -> ij', partial_A_j, V_tt_i[0]) + np.einsum('ijk, ik -> ij', partial_A_i, V_tt_j[0]) + np.einsum('jk, ik -> ij', self.A(), W_tt_list[0]))
+        W_tp1_t_list.append(partial_a + partial_A @ self.X_hat_tt_list_hom[0] + np.einsum('ijk, ik -> ij', partial_A_j, V_tt_i[0]) + np.einsum('ijk, ik -> ij', partial_A_i, V_tt_j[0]) + np.einsum('jk, ik -> ij', self.A[0], W_tt_list[0]))
         W_tp1_t = W_tp1_t_list[-1]
         if isinstance(verbose, tqdm):
             tr = verbose
@@ -236,7 +246,7 @@ class KalmanFilter:
         for t in range(1, t_max):
             eps = observations[t] - self.X_hat_tp1_t_list_hom[t, self.first_observed:]
             W_tt = W_tp1_t + M @ eps + np.einsum('ijk, ik -> ij', N_j, V_tp1_t_i[t, :, self.first_observed:]) + np.einsum('ijk, ik -> ij', N_i, V_tp1_t_j[t, :, self.first_observed:]) - np.einsum('jk, ik -> ij', k_tilde, W_tp1_t[:, self.first_observed:])
-            W_tp1_t = partial_a + partial_A @ self.X_hat_tt_list_hom[t] + np.einsum('ijk, ik -> ij', partial_A_j, V_tt_i[t]) + np.einsum('ijk, ik -> ij', partial_A_i, V_tt_j[t]) + np.einsum('jk, ik -> ij', self.A(), W_tt)
+            W_tp1_t = partial_a + partial_A @ self.X_hat_tt_list_hom[t] + np.einsum('ijk, ik -> ij', partial_A_j, V_tt_i[t]) + np.einsum('ijk, ik -> ij', partial_A_i, V_tt_j[t]) + np.einsum('jk, ik -> ij', self.A[0], W_tt)
             W_tp1_t_list.append(W_tp1_t)
             W_tt_list.append(W_tt)
             if verbose:
@@ -300,17 +310,14 @@ class PolynomialModel:
         for path in paths:
             Path(path).mkdir(parents=True, exist_ok=True)
 
-    def state_space_params(self, param, deriv_order=0, wrt=None):
+    def state_space_params(self, param, deriv_order=0, wrt=None, return_stack=False):
         wrt = np.atleast_1d(wrt)
         k = np.size(wrt)
         n_components = 1 + k * (deriv_order >= 1) + int(k * (k + 1) / 2) * (deriv_order == 2)
 
-        poly_B = self.poly_B(param, poly_order=2, deriv_order=deriv_order, wrt=wrt)
+        poly_B = self.poly_B(param, poly_order=2, deriv_order=deriv_order, wrt=wrt, return_stack=True)
         if deriv_order == 0:
             poly_B = poly_B[None, ...]
-        if deriv_order >= 1:
-            poly_B[0] = poly_B[0][None, ...]
-            poly_B = np.vstack(poly_B)
 
         a = poly_B[:, 1:(1 + self.dim), 0]
         A = poly_B[:, 1:(1 + self.dim), 1:(1 + self.dim)]
@@ -348,7 +355,10 @@ class PolynomialModel:
             Mji = np.einsum('ij, ik -> ijk', a[1 + j_ind], a[1 + i_ind]) + np.einsum('ijk, kl, iml -> ijm', A[1 + j_ind], Sigma_lim[0], A[1 + i_ind]) + sym(np.einsum('ijk, ik, l -> ijl ', A[1 + j_ind], mu_lim[1 + i_ind], a[0]) + np.einsum('ijk, k, il -> ijl', A[1 + j_ind], mu_lim[0], a[1 + i_ind]) +  np.einsum('jk, ik, il -> ijl', A[0], mu_lim[1 + j_ind], a[1 + i_ind]) + np.einsum('jk, ikl, iml -> ijm', A[0], Sigma_lim[1 + j_ind], A[1 + i_ind]))
             C[(k + 1):] = Sigma_lim[(k + 1):] - np.einsum('jk, ikl, ml -> ijm', A[0], Sigma_lim[(k + 1):], A[0]) - Mij - Mji - sym(np.einsum('ij, l -> ijl', a[(k + 1):], a[0]) + np.einsum('ijk, k, l -> ijl ', A[(k + 1):], mu_lim[0], a[0]) + np.einsum('jk, ik, l -> ijl', A[0], mu_lim[(k + 1):], a[0]) +  np.einsum('jk, k, il -> ijl', A[0], mu_lim[0], a[(k + 1):]) + A[(k + 1):] @ Sigma_lim[0] @ A[0].T)
 
-        if deriv_order == 0:
+        if return_stack:
+            return a, A, C
+
+        if (deriv_order == 0):
             return a.squeeze(), A.squeeze(), C.squeeze()
         elif deriv_order == 1:
             return [a[0], a[1:]], [A[0], A[1:]], [C[0], C[1:]]
@@ -358,7 +368,7 @@ class PolynomialModel:
     def poly_A(self, param, poly_order, deriv_order=0, wrt=None):
         pass
 
-    def poly_B(self, param, poly_order, deriv_order=0, wrt=None):
+    def poly_B(self, param, poly_order, deriv_order=0, wrt=None, return_stack=False):
         wrt = np.atleast_1d(wrt)
         k = np.size(wrt)
         poly_A = self.poly_A(param, max(sum(self.signature, [])) * poly_order, deriv_order, wrt)
@@ -410,15 +420,18 @@ class PolynomialModel:
             ind = mult_to_ind(lamb_tilde, dicts)
             poly_B_sig[..., i, cols] = poly_B[..., ind, diff_cols_zero_orig][..., undiff_cols_duplicates_orig]
 
-        if deriv_order == 0:
+        if return_stack:
+            if deriv_order == 0:
+                return poly_B_sig[None, ...]
+            else:
+                return poly_B_sig
+
+        if (deriv_order == 0):
             return poly_B_sig
         elif deriv_order == 1:
             return [poly_B_sig[0], poly_B_sig[1:]]
         else:
             return [poly_B_sig[0], poly_B_sig[1:(k + 1)], poly_B_sig[k + 1:]]
-
-    def Q(self, param, num):
-        pass
 
     def calc_filter_B(self, poly_order):
         if np.isnan(self.true_param).any():
@@ -561,7 +574,7 @@ class PolynomialModel:
         if np.isnan(self.true_param).any():
             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
 
-        self.wrt = wrt
+        self.wrt = np.atleast_1d(wrt)
 
         filepath_U = './saves/' + self.__class__.__name__ + '/Covariance/Explicit/U{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
         filepath_W = './saves/' + self.__class__.__name__ + '/Covariance/Explicit/W{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
@@ -571,19 +584,18 @@ class PolynomialModel:
         self.dicts = return_dict(self.dim * (np.size(wrt) + 2), order=4)
         self.dicts2 = return_dict(self.dim * (int(np.size(wrt) * (np.size(wrt) + 1) / 2) + np.size(wrt) + 2), order=2)
 
-        partial_a = partial(self.a, param=self.true_param)
-        partial_A = partial(self.A, param=self.true_param)
-        partial_C = partial(self.C, param=self.true_param)
+        a, A, C = self.state_space_params(self.true_param, deriv_order=2, wrt=np.arange(np.size(self.true_param)), return_stack=True)
         partial_E_0 = partial(self.init.E_0, param=self.true_param)
         partial_Cov_0 = partial(self.init.Cov_0, param=self.true_param)
-        partial_C_lim = partial(self.C_lim, param=self.true_param)
-        self.kalman_filter = KalmanFilter(dim=self.dim, a=partial_a, A=partial_A, C=partial_C, E_0=partial_E_0, Cov_0=partial_Cov_0, C_lim=partial_C_lim, first_observed=self.first_observed)
+        self.kalman_filter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=partial_E_0, Cov_0=partial_Cov_0, first_observed=self.first_observed)
         self.kalman_filter.build_covariance()
 
         k = np.size(self.wrt)
-        a_0 = self.a(self.true_param, deriv_order=0)
-        a_1 = self.a(self.true_param, deriv_order=1, wrt=self.wrt)
-        a_2 = self.a(self.true_param, deriv_order=2, wrt=self.wrt)
+        wrt2 = np.where(np.isin(np.triu_indices(np.size(self.true_param))[0], self.wrt) & np.isin(np.triu_indices(np.size(self.true_param))[1], self.wrt))[0]
+
+        a_0 = a[0]
+        a_1 = a[1 + self.wrt]
+        a_2 = a[1 + np.size(self.true_param) + wrt2]
         self.filter_c4 = np.append(a_0, a_1.flatten())
         self.filter_c2 = np.hstack((a_0, a_1.flatten(), a_2.flatten()))
 
@@ -605,20 +617,20 @@ class PolynomialModel:
         S_hat_o = np.einsum('ijk, ikl -> ijl', S_j[:, self.first_observed:, self.first_observed:], S_i_tilde) + np.einsum('ijk, ikl -> ijl', S_i[:, self.first_observed:, self.first_observed:], S_j_tilde)
         SS = (S[:, :, self.first_observed:] @ Sig_inv - Sig[:, self.first_observed:] @ S_tilde)
 
-        A_1 = (self.A(self.true_param, deriv_order=1, wrt=self.wrt) @ K_tilde + self.A(self.true_param) @ SS) @ self.kalman_filter.H
-        A_10 = self.A(self.true_param, deriv_order=1, wrt=self.wrt) @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - self.A(self.true_param) @ SS @ self.kalman_filter.H
+        A_1 = (A[1 + self.wrt] @ K_tilde + A[0] @ SS) @ self.kalman_filter.H
+        A_10 = A[1 + self.wrt] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - A[0] @ SS @ self.kalman_filter.H
         A_11 = self.kalman_filter.F_lim
 
-        prod_i = np.einsum('ijk, lkm -> iljm', self.A(self.true_param, deriv_order=1, wrt=self.wrt), SS) @ self.kalman_filter.H
+        prod_i = np.einsum('ijk, lkm -> iljm', A[1 + self.wrt], SS) @ self.kalman_filter.H
         prod_ij = (prod_i + np.transpose(prod_i, (1, 0, 2, 3)))[np.triu_indices(k)]
         M = R[:, :, self.first_observed:] @ Sig_inv - S_hat + np.einsum('jk, ikl -> ijl', K_tilde, S_hat_o) - np.einsum('jk, ikl, lm -> ijm', K_tilde, R[:, self.first_observed:, self.first_observed:], Sig_inv)
         N_i = np.einsum('jk, ikl -> ijl', Sig[:, self.first_observed:], S_i_tilde) - S_i[:, :, self.first_observed:] @ Sig_inv
         N_j = np.einsum('jk, ikl -> ijl', Sig[:, self.first_observed:], S_j_tilde) - S_j[:, :, self.first_observed:] @ Sig_inv
 
-        A_2 = self.A(self.true_param, deriv_order=2, wrt=self.wrt) @ K_tilde @ self.kalman_filter.H + prod_ij + self.A(self.true_param) @ M @ self.kalman_filter.H
-        A_20 = self.A(self.true_param, deriv_order=2, wrt=self.wrt) @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - prod_ij - self.A(self.true_param) @ M @ self.kalman_filter.H
-        A_21_i = self.A(self.true_param, deriv_order=1, wrt=self.wrt)[np.triu_indices(k)[0]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + self.A(self.true_param) @ N_i @ self.kalman_filter.H
-        A_21_j = self.A(self.true_param, deriv_order=1, wrt=self.wrt)[np.triu_indices(k)[1]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + self.A(self.true_param) @ N_j @ self.kalman_filter.H
+        A_2 = A[1 + np.size(self.true_param) + wrt2] @ K_tilde @ self.kalman_filter.H + prod_ij + A[0] @ M @ self.kalman_filter.H
+        A_20 = A[1 + np.size(self.true_param) + wrt2] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) - prod_ij - A[0] @ M @ self.kalman_filter.H
+        A_21_i = A[1 + self.wrt][np.triu_indices(k)[0]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + A[0] @ N_i @ self.kalman_filter.H
+        A_21_j = A[1 + self.wrt][np.triu_indices(k)[1]] @ (np.eye(self.dim) - K_tilde @ self.kalman_filter.H) + A[0] @ N_j @ self.kalman_filter.H
         A_22 = self.kalman_filter.F_lim
 
         self.filter_C4 = np.block([[A_0], [np.vstack(A_1)]])
@@ -675,6 +687,8 @@ class PolynomialModel:
         return obj
 
     def log_lik(self, param, t, verbose=0):
+        a, A, C = self.state_space_params(param=param)
+        a, A, C = a[None, ...], A[None, ...], C[None, ...]
         kfilter = KalmanFilter(dim=self.dim, a=partial(self.a, param=param), A=partial(self.A, param=param), C=partial(self.C, param=param), E_0=partial(self.init.E_0, param=param), Cov_0=partial(self.init.Cov_0, param=param), first_observed=self.first_observed)
         kfilter.build_covariance(t_max=t)
         kfilter.build_kalman_filter(observations=self.observations, t_max=t, verbose=verbose)
@@ -899,9 +913,21 @@ class PolynomialModel:
             A_hat[self.dim:2 * self.dim, :2 * self.dim] = np.hstack((kfilter.K_lim @ kfilter.H, kfilter.F_lim))
             A_hat[2 * self.dim:, :] = np.hstack(((K_prime @ kfilter.H).reshape(k * self.dim, self.dim), F_prime.reshape(k * self.dim, self.dim), np.kron(np.eye(k), kfilter.F_lim)))
 
-            Q2_hat = tracy_singh(np.diag(unit_vec(k + 2, 1)), np.kron(np.diag(unit_vec(k + 2, 1)), self.Q(param, 2)), (k + 2, k + 2), (self.dim, self.dim))
-            Q_hat = tracy_singh(np.diag(unit_vec(k + 2, 1)), np.kron(unit_vec(k + 2, 1, as_column=True), self.Q(param, 1)), (k + 2, k + 2), (self.dim, self.dim))
-            q_hat = tracy_singh(unit_vec(k + 2, 1, as_column=True), np.kron(unit_vec(k + 2, 1, as_column=True), self.Q(param, 0).reshape(-1, 1)), (k + 2, 1), (self.dim, 1)).squeeze()
+            # TODO: The following two paragraphs need reimplementation of a and A
+            j = np.arange(self.dim ** 2) // self.dim
+            i = np.arange(self.dim ** 2) - j * self.dim
+            i, j = np.maximum(i, j), np.minimum(i, j)
+            l = (i + j * (self.dim - (j + 1) / 2)).astype('int')
+
+            Q2 = np.zeros((self.dim ** 2, self.dim ** 2))
+            Q2[:, np.unique(l, return_index=True)[1]] = poly_B[0, (self.dim + 1):, (self.dim + 1):][l]
+            Q2 -= np.kron(A[0], A[0])
+            Q1 = poly_B[0, (self.dim + 1):, 1:(1 + self.dim)][l] - kron_sym(a[:1].T, A[0])
+            q = poly_B[0, (self.dim + 1):, 0][l] - np.kron(a[0], a[0])
+
+            Q2_hat = tracy_singh(np.diag(unit_vec(k + 2, 1)), np.kron(np.diag(unit_vec(k + 2, 1)), Q2), (k + 2, k + 2), (self.dim, self.dim))
+            Q_hat = tracy_singh(np.diag(unit_vec(k + 2, 1)), np.kron(unit_vec(k + 2, 1, as_column=True), Q1), (k + 2, k + 2), (self.dim, self.dim))
+            q_hat = tracy_singh(unit_vec(k + 2, 1, as_column=True), np.kron(unit_vec(k + 2, 1, as_column=True), q.reshape(-1, 1)), (k + 2, 1), (self.dim, 1)).squeeze()
             lamb = np.kron(a_hat, a_hat) + q_hat
             Pi = np.kron(a_hat.reshape(-1, 1), A_hat) + np.kron(A_hat, a_hat.reshape(-1, 1)) + Q_hat
             Lamb = np.kron(A_hat, A_hat) + Q2_hat
@@ -1247,31 +1273,6 @@ class HestonModel(PolynomialModel):
             heston_A[(1 + k):] = deriv2_A[np.triu_indices(len(wrt))]
         return heston_A.squeeze()
 
-    def Q(self, param, num):
-        kappa, theta, sigma, rho = param
-        if num == 2:
-            result = np.zeros((9, 9))
-            result[-1, 0] = 2 / kappa**2 * (1 - np.exp(-kappa * self.dt))**2
-            return result
-        elif num == 1:
-            N11 = 1 / kappa * np.exp(-kappa * self.dt) * (1 - np.exp(-kappa * self.dt)) * sigma**2
-            N12 = rho * sigma * self.dt * np.exp(-kappa * self.dt)
-            N13 = -sigma**2 / kappa**2 * np.exp(-kappa * self.dt) * (1 - np.exp(-kappa * self.dt)) + sigma**2 / kappa * (1 + kappa * rho**2 * self.dt) * self.dt * np.exp(-kappa * self.dt)
-            N22 = 1 / kappa * (1 - np.exp(-kappa * self.dt))
-            N23 = 3 * rho * sigma / kappa**2 * (1 - np.exp(-kappa * self.dt) - kappa * np.exp(-kappa * self.dt))
-            N33 = 1 / kappa**3 * (6 * sigma**2 * (1 + 2 * rho**2) + 4 * kappa**2 * theta * self.dt) * (1 - np.exp(-kappa * self.dt)) - 1 / kappa**3 * (3 * sigma**2 + 4 * kappa * theta) * (1 - np.exp(-kappa * self.dt))**2 - 6 * sigma**2 / kappa**2 * (1 + 2 * rho**2 + self.dt * rho**2 * kappa) * self.dt * np.exp(-kappa * self.dt)
-            result = np.zeros((9, 3))
-            result[:, 0] = np.array([N11, N12, N13, N12, N22, N23, N13, N23, N33])
-            return result
-        elif num == 0:
-            N11 = (1 - np.exp(-kappa * self.dt))**2 * sigma**2 / (2 * kappa) * theta
-            N12 = theta / kappa * rho * sigma * (1 - np.exp(-kappa * self.dt) - kappa * self.dt * np.exp(-kappa * self.dt))
-            N13 = sigma**2 * theta / (2 * kappa**2) * (1 + 4 * rho**2 + np.exp(-kappa * self.dt)) * (1 - np.exp(-kappa * self.dt)) - sigma**2 * theta / kappa * (1 + (kappa * self.dt + 2) * rho**2) * self.dt * np.exp(-kappa * self.dt)
-            N22 = theta * self.dt + theta / kappa * (np.exp(-kappa * self.dt) - 1)
-            N23 = 3 * rho * sigma / kappa**2 * theta * (kappa - 2 + (kappa * self.dt + 2) * np.exp(-kappa * self.dt))
-            N33 = 1 / kappa**3 * (9 * sigma**2 * theta * (1 + 4 * rho**2) + 4 * kappa**2 * theta**2 * self.dt) * (np.exp(-kappa * self.dt) - 1) + 1 / kappa**3 * (2 * kappa * theta**2 + 3 / 2 * sigma**2 * theta) * (np.exp(-kappa * self.dt) - 1)**2 + 6 * sigma**2 / kappa**2 * theta * (1 + 4 * rho**2 + kappa * rho**2 * self.dt) * self.dt * np.exp(-kappa * self.dt) + 3 * sigma**2 / kappa**2 * theta * (1 + 4 * rho**2) * self.dt + 2 * theta**2 * self.dt ** 2
-            return np.array([N11, N12, N13, N12, N22, N23, N13, N23, N33])
-
     def generate_observations(self, t_max, inter_steps, seed=None, verbose=0):
         dt = self.dt / inter_steps
         if seed is not None:
@@ -1545,15 +1546,17 @@ class OUNIGModel(PolynomialModel):
         self.observations = observations
 
 
-init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
 # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 ## Test the new restructuring #1 (Simulation study, no observations needed)
-heston = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=None)
+heston = HestonModel(first_observed=1, init=init, dt=1, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=None)
+# heston.setup_filter(wrt=[1, 2])
 # B = heston.poly_B(heston.true_param, poly_order=1)
 tic = time()
-a2, A2, C2 = heston.state_space_params(heston.true_param, deriv_order=2, wrt=np.array([0, 1, 2, 3]))
+a2, A2, C2 = heston.state_space_params(heston.true_param)
 toc = time()
 print(toc - tic)
 
