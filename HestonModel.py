@@ -316,8 +316,6 @@ class PolynomialModel:
         n_components = 1 + k * (deriv_order >= 1) + int(k * (k + 1) / 2) * (deriv_order == 2)
 
         poly_B = self.poly_B(param, poly_order=2, deriv_order=deriv_order, wrt=wrt, return_stack=True)
-        if deriv_order == 0:
-            poly_B = poly_B[None, ...]
 
         a = poly_B[:, 1:(1 + self.dim), 0]
         A = poly_B[:, 1:(1 + self.dim), 1:(1 + self.dim)]
@@ -687,9 +685,8 @@ class PolynomialModel:
         return obj
 
     def log_lik(self, param, t, verbose=0):
-        a, A, C = self.state_space_params(param=param)
-        a, A, C = a[None, ...], A[None, ...], C[None, ...]
-        kfilter = KalmanFilter(dim=self.dim, a=partial(self.a, param=param), A=partial(self.A, param=param), C=partial(self.C, param=param), E_0=partial(self.init.E_0, param=param), Cov_0=partial(self.init.Cov_0, param=param), first_observed=self.first_observed)
+        a, A, C = self.state_space_params(param=param, return_stack=True)
+        kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=partial(self.init.E_0, param=param), Cov_0=partial(self.init.Cov_0, param=param), first_observed=self.first_observed)
         kfilter.build_covariance(t_max=t)
         kfilter.build_kalman_filter(observations=self.observations, t_max=t, verbose=verbose)
         eps = (self.observations[1:t + 1, self.first_observed:] - kfilter.X_hat_tp1_t_list[1:t + 1, self.first_observed:])
@@ -742,7 +739,7 @@ class PolynomialModel:
 
         if update_estimate:
             self.true_param[fit_parameter] = result
-            self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)
+            self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)  # TODO
 
         return result
 
@@ -764,7 +761,7 @@ class PolynomialModel:
 
             if update_estimate:
                 self.true_param[fit_parameter] = qml_list[-1]
-                self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)
+                self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)  # TODO
 
         else:
             t_range = np.arange(t_max + every)[::every][1:]
@@ -781,7 +778,7 @@ class PolynomialModel:
 
             if update_estimate:
                 self.true_param[fit_parameter] = qml_list[-1]
-                self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])
+                self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3])  # TODO
 
             np.savetxt(filename, qml_list)
 
@@ -872,16 +869,14 @@ class PolynomialModel:
                 tr = tqdm(total=2 * t_max, desc='Computing U')
             else:
                 raise Exception('verbose has to be 0 or 1 or instance of class tqdm.')
+
+            a, A, C = self.state_space_params(param=param, deriv_order=1, wrt=np.arange(np.size(param)), return_stack=True)
             if kfilter is None:
-                C = partial(self.C, param=param)
-                a = partial(self.a, param=param)
-                A = partial(self.A, param=param)
                 E_0 = partial(self.init.E_0, param=param)
                 Cov_0 = partial(self.init.Cov_0, param=param)
-                C_lim = partial(self.C_lim, param=param)
 
-                kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=E_0, Cov_0=Cov_0, C_lim=C_lim, first_observed=self.first_observed)
-                kfilter.build_covariance(t_max=1000)
+                kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=E_0, Cov_0=Cov_0, first_observed=self.first_observed)
+                kfilter.build_covariance()
                 kfilter.build_kalman_filter_hom(observations=self.observations, t_max=t_max, verbose=tr, close_pb=False)
             if deriv_filters is None:
                 deriv_filter_hom, _ = kfilter.deriv_filter_hom(observations=self.observations, wrt=wrt, t_max=t_max, verbose=tr, close_pb=False)
@@ -905,15 +900,15 @@ class PolynomialModel:
                 Gammaj[j, 2 * self.dim:, :] = Gammaj[j, :, 2 * self.dim:].T
             Gamma = 1 / 2 * Gammaj.reshape(k, Gammaj.shape[1]**2, order='F')
 
-            K_prime = self.A(param, deriv_order=1, wrt=wrt) @ kfilter.Sig_tp1_t_lim[:, self.first_observed:] @ Sig_inv + np.einsum('jk, ikl, lm -> ijm', self.A(param), s_star[:, :, self.first_observed:], Sig_inv) - np.einsum('jk, kl, lm, imn, nr -> ijr', self.A(param), kfilter.Sig_tp1_t_lim[:, self.first_observed:], Sig_inv, s_star[:, self.first_observed:, self.first_observed:], Sig_inv)
-            F_prime = self.A(param, deriv_order=1, wrt=wrt) - K_prime @ kfilter.H
-            a_hat = np.hstack((self.a(param), self.a(param), self.a(param, deriv_order=1, wrt=wrt).flatten()))
+            wrt = np.atleast_1d(wrt)
+            K_prime = A[1 + wrt] @ kfilter.Sig_tp1_t_lim[:, self.first_observed:] @ Sig_inv + np.einsum('jk, ikl, lm -> ijm', A[0], s_star[:, :, self.first_observed:], Sig_inv) - np.einsum('jk, kl, lm, imn, nr -> ijr', A[0], kfilter.Sig_tp1_t_lim[:, self.first_observed:], Sig_inv, s_star[:, self.first_observed:, self.first_observed:], Sig_inv)
+            F_prime = A[1 + wrt] - K_prime @ kfilter.H
+            a_hat = np.hstack((a[0], a[0], a[1 + wrt].flatten()))
             A_hat = np.zeros((self.dim * (k + 2), self.dim * (k + 2)))
-            A_hat[:self.dim, :self.dim] = self.A(param)
+            A_hat[:self.dim, :self.dim] = A[0]
             A_hat[self.dim:2 * self.dim, :2 * self.dim] = np.hstack((kfilter.K_lim @ kfilter.H, kfilter.F_lim))
             A_hat[2 * self.dim:, :] = np.hstack(((K_prime @ kfilter.H).reshape(k * self.dim, self.dim), F_prime.reshape(k * self.dim, self.dim), np.kron(np.eye(k), kfilter.F_lim)))
 
-            # TODO: The following two paragraphs need reimplementation of a and A
             j = np.arange(self.dim ** 2) // self.dim
             i = np.arange(self.dim ** 2) - j * self.dim
             i, j = np.maximum(i, j), np.minimum(i, j)
@@ -1038,16 +1033,13 @@ class PolynomialModel:
             else:
                 raise Exception('verbose has to be 0 or 1 or instance of class tqdm')
 
+            a, A, C = self.state_space_params(param=param, deriv_order=2, wrt=np.arange(np.size(param)), return_stack=True)
             if kfilter is None:
-                C = partial(self.C, param=param)
-                a = partial(self.a, param=param)
-                A = partial(self.A, param=param)
                 E_0 = partial(self.init.E_0, param=param)
                 Cov_0 = partial(self.init.Cov_0, param=param)
-                C_lim = partial(self.C_lim, param=param)
 
-                kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=E_0, Cov_0=Cov_0, C_lim=C_lim, first_observed=self.first_observed)
-                kfilter.build_covariance(t_max=1000)
+                kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=E_0, Cov_0=Cov_0, first_observed=self.first_observed)
+                kfilter.build_covariance()
                 kfilter.build_kalman_filter_hom(observations=self.observations, t_max=t_max, verbose=tr, close_pb=False)
             s_star = kfilter.S_star(wrt=wrt)
             s_star_o_i = s_star[np.triu_indices(np.size(wrt))[0], self.first_observed:, self.first_observed:]
@@ -1169,12 +1161,9 @@ class PolynomialModel:
                     V, Std, Corr = pkl.load(open(filepath, 'rb'))
                     return V.squeeze(), Std.squeeze(), Corr.squeeze()
                 else:
-                    C = partial(self.C, param=param)
-                    a = partial(self.a, param=param)
-                    A = partial(self.A, param=param)
+                    a, A, C = self.state_space_params(param=param, deriv_order=2, wrt=np.arange(np.size(param)), return_stack=True)
                     E_0 = partial(self.init.E_0, param=param)
                     Cov_0 = partial(self.init.Cov_0, param=param)
-                    C_lim = partial(self.C_lim, param=param)
 
                     if t_max >= self.observations.shape[0]:
                         raise Exception('Not enough observations available for t_max = {}'.format(t_max))
@@ -1187,8 +1176,8 @@ class PolynomialModel:
                             verbose = tqdm(total=2 * t_max, desc='Computing filter')
                         elif (verbose == 1) & W_missing:
                             verbose = tqdm(total=3 * t_max, desc='Computing filter')
-                        kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=E_0, Cov_0=Cov_0, C_lim=C_lim, first_observed=self.first_observed)
-                        kfilter.build_covariance(t_max=10000)
+                        kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=E_0, Cov_0=Cov_0, first_observed=self.first_observed)
+                        kfilter.build_covariance()
                         kfilter.build_kalman_filter_hom(observations=self.observations, t_max=t_max, verbose=verbose, close_pb=False)
                         if verbose:
                             verbose.desc = 'Computing derivative filter'
@@ -1232,7 +1221,7 @@ class HestonModel(PolynomialModel):
         self.params_bounds = np.array([[0.0001, 10], [0.0001 ** 2, 1], [0.0001, 1], [-1, 1]])
 
         if not np.isnan(self.true_param).any():
-            self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)
+            self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}, {:.3f}]_dt={:.1e}_'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.true_param[3], self.dt)  # TODO
             if wrt is not None:
                 self.setup_filter(wrt)
         elif wrt is not None:
@@ -1546,14 +1535,18 @@ class OUNIGModel(PolynomialModel):
         self.observations = observations
 
 
-# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
 # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 ## Test the new restructuring #1 (Simulation study, no observations needed)
-heston = HestonModel(first_observed=1, init=init, dt=1, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=None)
-# heston.setup_filter(wrt=[1, 2])
+heston = HestonModel(first_observed=0, init=init, dt=1, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
+V, Std, Corr = heston.compute_V()
+
+ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=2)
+V, Std, Corr = ou.compute_V()
+
 # B = heston.poly_B(heston.true_param, poly_order=1)
 tic = time()
 a2, A2, C2 = heston.state_space_params(heston.true_param)
@@ -1569,10 +1562,6 @@ tic = time()
 heston.C_lim(heston.true_param)
 toc=time()
 print(toc - tic)
-
-V, Std, Corr = heston.compute_V()
-ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=2)
-V, Std, Corr = ou.compute_V()
 
 
 ## Test the new restructuring #2 (Simulation study with observations)
