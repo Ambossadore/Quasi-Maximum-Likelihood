@@ -1,12 +1,11 @@
 import os
 import pickle as pkl
 import warnings
-from pathlib import Path
 from functools import partial
 from itertools import product, compress
+from pathlib import Path
 from time import time
 
-import numpy as np
 from scipy.linalg import expm, expm_frechet
 from scipy.optimize import minimize
 from scipy.special import factorial
@@ -287,6 +286,8 @@ class PolynomialModel:
         self.W = None
         self.kalman_filter = None
 
+        if 'd' in signature:
+            warnings.warn('The current implementation of differenced components assumes that no other components depend on these.')
         self.signature_string = signature
         signature = signature.split('_')
         self.dim_c = len(signature)
@@ -427,8 +428,10 @@ class PolynomialModel:
             poly_B[(k + 1):] = first_frechet + second_frechet
 
         dicts_sig = return_dict(self.dim, poly_order)
-        diff_cols_zero = np.all([(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]], axis=0)
-        undiff_cols_duplicates = np.all([(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]], axis=0)
+        diff_cols_zero = [(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]]
+        diff_cols_zero = np.all(diff_cols_zero, axis=0) if diff_cols_zero else np.repeat(True, dicts_sig.shape[0])
+        undiff_cols_duplicates = [(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]]
+        undiff_cols_duplicates = np.all(undiff_cols_duplicates, axis=0) if undiff_cols_duplicates else np.repeat(True, dicts_sig.shape[0])
         cols = np.where(diff_cols_zero & undiff_cols_duplicates)[0]
 
         diff_cols_zero_orig = [(dicts[:, i] == 0) for i in self.differenced_components]
@@ -707,9 +710,9 @@ class PolynomialModel:
             filename = './saves/' + cls.__name__ + '/Observations/' + obs
         else:
             if seed is not None:
-                filename = './saves/' + cls.__name__ + '/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in true_param) + ']_dt={:.1e}_sig{}_sc['.format(dt, signature, seed, obs) + ', '.join('{:.1f}'.format(sc) for sc in obj.scaling) + ']_seed{}_{}obs.txt'
+                filename = './saves/' + cls.__name__ + '/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in true_param) + ']_dt={:.1e}_sig{}_seed{}_{}obs.txt'.format(dt, signature, seed, obs)
             else:
-                filename = './saves/' + cls.__name__ + '/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in true_param) + ']_dt={:.1e}_sig{}_sc['.format(dt, signature, seed, obs) + ', '.join('{:.1f}'.format(sc) for sc in obj.scaling) + ']_{}obs.txt'
+                filename = './saves/' + cls.__name__ + '/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in true_param) + ']_dt={:.1e}_sig{}_{}obs.txt'.format(dt, signature, obs)
 
         if os.path.exists(filename):
             observations = np.loadtxt(filename)
@@ -1285,6 +1288,7 @@ class HestonModel(PolynomialModel):
             deriv2_A[2, 3, mult_to_ind([1, 1], dicts), mult_to_ind([1, 0], dicts)] = 1
             deriv2_A = deriv2_A[np.ix_(wrt, wrt)]
             heston_A[(1 + k):] = deriv2_A[np.triu_indices(len(wrt))]
+
         return heston_A.squeeze()
 
     def generate_observations(self, t_max, inter_steps, seed=None, verbose=0):
@@ -1350,453 +1354,148 @@ class HestonModel(PolynomialModel):
         self.observations = observations
 
 
-# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-heston = HestonModel(first_observed=2, init=init, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8])
-# heston = HestonModel(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20., 140.])
-# V, Std, Corr = heston.compute_V()
+class OUNIGModel(PolynomialModel):
+    def __init__(self, first_observed, init, dt, signature, true_param=None, wrt=None, scaling=1):
+        params_names = np.array(['lambda', 'kappa', 'delta'])
+        params_bounds = np.array([[0.001, 10], [0.0001, 30], [0.0001, 10]])
+        super().__init__(first_observed, init, dt, signature, params_names, params_bounds, true_param, wrt, scaling)
 
-#
-# class OUNIGModel(PolynomialModel):
-#     def __init__(self, first_observed, init, dt, true_param=None, wrt=None):
-#         if true_param is None:
-#             true_param = np.repeat(np.nan, 3)
-#
-#         super().__init__(first_observed, init, dt, true_param)
-#         self.dim = 2
-#         self.params_names = np.array(['lambda', 'kappa', 'delta'])
-#         self.params_bounds = np.array([[0.001, 10], [0.0001, 30], [0.0001, 10]])
-#
-#         if not np.isnan(self.true_param).any():
-#             self.savestring = 'par=[{:.3f}, {:.3f}, {:.3f}]_dt={:.1e}'.format(self.true_param[0], self.true_param[1], self.true_param[2], self.dt)
-#             if wrt is not None:
-#                 self.setup_filter(wrt)
-#         elif wrt is not None:
-#             warnings.warn('Argument wrt was not used since the whole parameter has not yet been estimated. Please use method "setup_filter" after this has been done.', Warning)
-#
-#     def a(self, param, deriv_order=0, wrt=None):
-#         wrt = np.atleast_1d(wrt)
-#         if deriv_order == 0:
-#             return np.zeros(2)
-#         elif deriv_order == 1:
-#             deriv_array = np.zeros((3, 2))
-#             return deriv_array[wrt]
-#         elif deriv_order == 2:
-#             deriv_array = np.zeros((3, 3, 2))
-#             deriv_array = deriv_array[np.ix_(wrt, wrt)]
-#             return deriv_array[np.triu_indices(len(wrt))]
-#
-#     def A(self, param, deriv_order=0, wrt=None):
-#         wrt = np.atleast_1d(wrt)
-#         lamb, kappa, delta = param
-#         if deriv_order == 0:
-#             return np.array([[np.exp(-lamb * self.dt), 0], [kappa * (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa), np.exp(-kappa * self.dt)]])
-#         elif deriv_order == 1:
-#             deriv_array = np.zeros((3, 2, 2))
-#             deriv_array[0] = np.array([[-self.dt * np.exp(-lamb * self.dt), 0], [self.dt * kappa * np.exp(-lamb * self.dt) / (lamb - kappa) + kappa * (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa)**2, 0]])
-#             deriv_array[1] = np.array([[0, 0], [((1 - self.dt * kappa) * np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) + kappa * (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa)**2, -self.dt * np.exp(-kappa * self.dt)]])
-#             return deriv_array[wrt]
-#         elif deriv_order == 2:
-#             deriv_array = np.zeros((3, 3, 2, 2))
-#             A_lamb_lamb = np.array([[self.dt ** 2 * np.exp(-lamb * self.dt), 0], [2 * kappa * (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa)**3 - 2 * self.dt * kappa * np.exp(-lamb * self.dt) / (lamb - kappa)**2 - self.dt ** 2 * kappa * np.exp(-lamb * self.dt) / (lamb - kappa), 0]])
-#             A_lamb_kappa = np.array([[0, 0], [self.dt * (lamb * np.exp(-lamb * self.dt) + kappa * np.exp(-kappa * self.dt)) / (lamb - kappa)**2 + (lamb + kappa) / (lamb - kappa)**3 * (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)), 0]])
-#             A_kappa_kappa = np.array([[0, 0], [self.dt * (self.dt * kappa - 2) * np.exp(-kappa * self.dt) / (lamb - kappa) + ((1 - 2 * kappa * self.dt) * np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa)**2 + (lamb + kappa) / (lamb - kappa)**3 * (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)), self.dt**2 * np.exp(-kappa * self.dt)]])
-#
-#             deriv_array[0, 0] = A_lamb_lamb
-#             deriv_array[0, 1] = A_lamb_kappa
-#             deriv_array[1, 1] = A_kappa_kappa
-#
-#             deriv_array = deriv_array[np.ix_(wrt, wrt)]
-#             return deriv_array[np.triu_indices(len(wrt))]
-#
-#     def poly_B(self, param, poly_order):
-#         lamb, kappa, delta = param
-#         dicts = return_dict(2, poly_order)
-#         alpha = 1
-#
-#         OU_A = np.zeros((n_dim(2, poly_order), n_dim(2, poly_order)))
-#         OU_A[mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -lamb
-#         OU_A[mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = kappa
-#         OU_A[mult_to_ind([0, 1], dicts), mult_to_ind([0, 1], dicts)] = -kappa
-#
-#         OU_A[mult_to_ind([2, 2], dicts), 0] = delta / alpha ** 3
-#         OU_A[mult_to_ind([2, 0], dicts), 0] = delta / alpha
-#         OU_A[mult_to_ind([0, 2], dicts), 0] = delta / alpha
-#         OU_A[mult_to_ind([4, 0], dicts), 0] = 3 * delta / alpha ** 3
-#         OU_A[mult_to_ind([0, 4], dicts), 0] = 3 * delta / alpha ** 3
-#
-#         OU_Bc = np.zeros(OU_A.shape)
-#         for i in range(OU_A.shape[0]):
-#             for j in range(OU_Bc.shape[0]):
-#                 masks = mask(dicts[i], dicts, typ='leq') & mask(dicts[j], dicts, typ='leq')
-#                 lamb_ell = (ind_to_mult(i, dicts) - dicts)[masks]
-#                 mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
-#                 OU_Bc[i, j] = (multi_binom(dicts[i], dicts[masks]) * OU_A[mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum()
-#
-#         OU_B = expm(OU_Bc * self.dt)
-#         return OU_B
-#
-#     def C(self, param, t):
-#         lamb, kappa, delta = param
-#         lamb, kappa, delta = param
-#         alpha = 1
-#         psi = (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) + np.exp(-kappa * self.dt) / (lamb + kappa)
-#         B11 = 1 - np.exp(-2 * lamb * self.dt)
-#         B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb * self.dt) * psi
-#         B22 = np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa))**2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa**2 * psi**2
-#         return (delta / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
-#
-#     def C_lim(self, param, deriv_order=0, wrt=None):
-#         wrt = np.atleast_1d(wrt)
-#         lamb, kappa, delta = param
-#         alpha = 1
-#         psi = (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) + np.exp(-kappa * self.dt) / (lamb + kappa)
-#         if deriv_order == 0:
-#             B11 = 1 - np.exp(-2 * lamb * self.dt)
-#             B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb * self.dt) * psi
-#             B22 = np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2
-#             return (delta / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
-#         elif deriv_order == 1:
-#             psi_l = self.dt * np.exp(-lamb * self.dt) / (lamb - kappa) + (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa) ** 2 - np.exp(-kappa * self.dt) / (lamb + kappa) ** 2
-#             psi_k = (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) ** 2 - 2 * self.dt * np.exp(-kappa * self.dt) * lamb / (lamb ** 2 - kappa ** 2) - np.exp(-kappa * self.dt) / (lamb + kappa) ** 2
-#
-#             deriv_array = np.zeros((3, 2, 2))
-#             B11 = (delta / alpha) / lamb * self.dt * np.exp(-2 * lamb * self.dt) - (delta / alpha) / (2 * lamb ** 2) * (1 - np.exp(-2 * lamb * self.dt))
-#             B12 = (delta / alpha) / (2 * lamb ** 2) * (kappa * np.exp(-lamb * self.dt) * psi - kappa / (lamb + kappa)) + (delta / alpha) / (2 * lamb) * (kappa * np.exp(-lamb * self.dt) * (self.dt * psi - psi_l) - kappa / (lamb + kappa) ** 2)
-#             B22 = (delta / alpha) / (2 * lamb) * ((1 - np.exp(-2 * kappa * self.dt)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa * self.dt) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) - (delta / alpha) / (2 * lamb ** 2) * (np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
-#             deriv_array[0] = np.array([[B11, B12], [B12, B22]])
-#
-#             B11 = 0
-#             B12 = (delta / alpha) / (2 * lamb) * (lamb / (lamb + kappa) ** 2 - np.exp(-lamb * self.dt) * psi - kappa * np.exp(-lamb * self.dt) * psi_k)
-#             B22 = (delta / alpha) / lamb * (np.exp(-2 * kappa * self.dt) * (lamb * kappa / (lamb + kappa) ** 3 - self.dt * kappa ** 2 / (lamb + kappa) ** 2 + self.dt * kappa / (lamb + kappa) + self.dt * lamb / kappa) + (1 - np.exp(-2 * kappa * self.dt)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
-#             deriv_array[1] = np.array([[B11, B12], [B12, B22]])
-#
-#             B11 = 1 - np.exp(-2 * lamb * self.dt)
-#             B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb * self.dt) * psi
-#             B22 = np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2
-#             deriv_array[2] = (1 / alpha) / (2 * lamb) * np.array([[B11, B12], [B12, B22]])
-#
-#             return deriv_array[wrt]
-#         elif deriv_order == 2:
-#             psi_l = self.dt * np.exp(-lamb * self.dt) / (lamb - kappa) + (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa) ** 2 - np.exp(-kappa * self.dt) / (lamb + kappa) ** 2
-#             psi_k = (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) ** 2 - 2 * self.dt * np.exp(-kappa * self.dt) * lamb / (lamb ** 2 - kappa ** 2) - np.exp(-kappa * self.dt) / (lamb + kappa) ** 2
-#             psi_ll = self.dt * ((kappa - lamb) * self.dt - 2) * np.exp(-lamb * self.dt) / (lamb - kappa) ** 2 - 2 * (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa) ** 3 + 2 * np.exp(-kappa * self.dt) / (lamb + kappa) ** 3
-#             psi_lk = self.dt * (np.exp(-kappa * self.dt) + np.exp(-lamb * self.dt)) / (lamb - kappa) ** 2 + 2 * (np.exp(-lamb * self.dt) - np.exp(-kappa * self.dt)) / (lamb - kappa) ** 3 + np.exp(-kappa * self.dt) / (lamb + kappa) ** 3 * (2 + (lamb + kappa) * self.dt)
-#             psi_kk = 2 * ((np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) ** 3 + np.exp(-kappa * self.dt) / (lamb + kappa) ** 3 + self.dt**2 * lamb * np.exp(-kappa * self.dt) / (lamb ** 2 - kappa ** 2) - 4 * self.dt * np.exp(-kappa * self.dt) * lamb * kappa / (lamb ** 2 - kappa ** 2) ** 2)
-#
-#             deriv_array = np.zeros((3, 3, 2, 2))
-#
-#             B11 = (delta / alpha) / lamb ** 3 * (1 - np.exp(-2 * lamb * self.dt)) - 2 * (delta / alpha) / lamb ** 2 * self.dt * (1 + lamb * self.dt) * np.exp(-2 * lamb * self.dt)
-#             B12 = -(delta / alpha) / lamb ** 3 * (kappa * np.exp(-lamb * self.dt) * psi - kappa / (lamb + kappa)) + (delta / alpha) / lamb ** 2 * (kappa * np.exp(-lamb * self.dt) * (psi_l - psi * self.dt) + kappa / (lamb + kappa) ** 2) + (delta / alpha) / (2 * lamb) * (2 * kappa / (lamb + kappa) ** 3 - kappa * np.exp(-lamb * self.dt) * (self.dt**2 * psi - 2 * self.dt * psi_l + psi_ll))
-#             B22 = (delta / alpha) / lamb * ((1 - np.exp(-2 * kappa * self.dt)) * kappa / (lamb + kappa) ** 3 + 3 * np.exp(-2 * kappa * self.dt) * kappa ** 2 / (lamb + kappa) ** 4 - kappa ** 2 * psi_l ** 2 - kappa ** 2 * psi * psi_ll) - (delta / alpha) / lamb ** 2 * ((1 - np.exp(-2 * kappa * self.dt)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa * self.dt) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) + (delta / alpha) / lamb ** 3 * (np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
-#             deriv_array[0, 0] = np.array([[B11, B12], [B12, B22]])
-#
-#             B11 = 0
-#             B12 = (delta / alpha) / (2 * lamb ** 2) * (np.exp(-lamb * self.dt) * psi + kappa * np.exp(-lamb * self.dt) * psi_k - lamb / (lamb + kappa) ** 2) + (delta / alpha) / (2 * lamb) * (np.exp(-lamb * self.dt) * (self.dt * psi - psi_l) + kappa * np.exp(-lamb * self.dt) * (self.dt * psi_k - psi_lk) - (lamb - kappa) / (lamb + kappa) ** 3)
-#             B22 = (delta / alpha) / lamb * (np.exp(-2 * kappa * self.dt) * (kappa * (kappa - 2 * lamb) / (lamb + kappa) ** 4 + 2 * self.dt * kappa ** 2 / (lamb + kappa) ** 3 - self.dt * kappa / (lamb + kappa) ** 2 + self.dt / kappa) + (1 - np.exp(-2 * kappa * self.dt)) * ((kappa - lamb) / (2 * (lamb + kappa) ** 3) - 1 / (2 * kappa ** 2)) - 2 * kappa * psi * psi_l - kappa ** 2 * psi_l * psi_k - kappa ** 2 * psi * psi_lk) - (delta / alpha) / lamb ** 2 * (np.exp(-2 * kappa * self.dt) * (lamb * kappa / (lamb + kappa) ** 3 - self.dt * kappa ** 2 / (lamb + kappa) ** 2 + kappa * self.dt / (lamb + kappa) + lamb * self.dt / kappa) + (1 - np.exp(-2 * kappa * self.dt)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
-#             deriv_array[0, 1] = np.array([[B11, B12], [B12, B22]])
-#
-#             B11 = (1 / alpha) / lamb * self.dt * np.exp(-2 * lamb * self.dt) - (1 / alpha) / (2 * lamb ** 2) * (1 - np.exp(-2 * lamb * self.dt))
-#             B12 = (1 / alpha) / (2 * lamb ** 2) * (kappa * np.exp(-lamb * self.dt) * psi - kappa / (lamb + kappa)) + (1 / alpha) / (2 * lamb) * (kappa * np.exp(-lamb * self.dt) * (self.dt * psi - psi_l) - kappa / (lamb + kappa) ** 2)
-#             B22 = (1 / alpha) / (2 * lamb) * ((1 - np.exp(-2 * kappa * self.dt)) * (1 / kappa - kappa / (lamb + kappa) ** 2) - 2 * np.exp(-2 * kappa * self.dt) * kappa ** 2 / (lamb + kappa) ** 3 - 2 * kappa ** 2 * psi * psi_l) - (1 / alpha) / (2 * lamb ** 2) * (np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2)
-#             deriv_array[0, 2] = np.array([[B11, B12], [B12, B22]])
-#
-#             B11 = 0
-#             B12 = - (delta / alpha) / (2 * lamb) * (2 * lamb / (lamb + kappa) ** 3 + 2 * np.exp(-lamb * self.dt) * psi_k + kappa * np.exp(-lamb * self.dt) * psi_kk)
-#             B22 = (delta / alpha) / lamb * (np.exp(-2 * kappa * self.dt) * (2 * (kappa ** 2 * self.dt**2 + lamb * self.dt) / (lamb + kappa) ** 2 - 4 * self.dt * kappa * lamb / (lamb + kappa) ** 3 + lamb * (lamb - 2 * kappa) / (lamb + kappa) ** 4 - 2 * kappa * self.dt**2 / (lamb + kappa) - 2 * lamb / kappa ** 2 * self.dt * (1 + kappa * self.dt)) + (1 - np.exp(-2 * kappa * self.dt)) * lamb * (1 / kappa ** 3 - 1 / (lamb + kappa) ** 3) - psi ** 2 - 4 * kappa * psi * psi_k - kappa ** 2 * psi_k ** 2 - kappa ** 2 * psi * psi_kk)
-#             deriv_array[1, 1] = np.array([[B11, B12], [B12, B22]])
-#
-#             B11 = 0
-#             B12 = (1 / alpha) / (2 * lamb) * (lamb / (lamb + kappa) ** 2 - np.exp(-lamb * self.dt) * psi - kappa * np.exp(-lamb * self.dt) * psi_k)
-#             B22 = (1 / alpha) / lamb * (np.exp(-2 * kappa * self.dt) * (lamb * kappa / (lamb + kappa) ** 3 - self.dt * kappa ** 2 / (lamb + kappa) ** 2 + self.dt * kappa / (lamb + kappa) + self.dt * lamb / kappa) + (1 - np.exp(-2 * kappa * self.dt)) * lamb / 2 * (1 / (lamb + kappa) ** 2 - 1 / kappa ** 2) - kappa * psi ** 2 - kappa ** 2 * psi * psi_k)
-#             deriv_array[1, 2] = np.array([[B11, B12], [B12, B22]])
-#
-#             deriv_array = deriv_array[np.ix_(wrt, wrt)]
-#             return deriv_array[np.triu_indices(len(wrt))]
-#
-#     def Q(self, param, num):
-#         lamb, kappa, delta = param
-#         alpha = 1
-#         if num == 2:
-#             return np.zeros((4, 4))
-#         elif num == 1:
-#             return np.zeros((4, 2))
-#         elif num == 0:
-#             psi = (np.exp(-kappa * self.dt) - np.exp(-lamb * self.dt)) / (lamb - kappa) + np.exp(-kappa * self.dt) / (lamb + kappa)
-#             B11 = 1 - np.exp(-2 * lamb * self.dt)
-#             B12 = kappa / (lamb + kappa) - kappa * np.exp(-lamb * self.dt) * psi
-#             B22 = np.exp(-2 * kappa * self.dt) * (kappa / (lamb + kappa)) ** 2 + (1 - np.exp(-2 * kappa * self.dt)) * (kappa / (lamb + kappa) + lamb / kappa) - kappa ** 2 * psi ** 2
-#             return (delta / alpha) / (2 * lamb) * np.array([B11, B12, B12, B22])
-#
-#     def generate_observations(self, t_max, inter_steps, seed=None, verbose=0):
-#         dt = self.dt / inter_steps
-#
-#         if seed is not None:
-#             np.random.seed(seed)
-#
-#         if not isinstance(inter_steps, int):
-#             raise TypeError('Attribute inter_steps needs to be integer.')
-#
-#         if np.isnan(self.true_param).any():
-#             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
-#
-#         if self.observations is not None:
-#             warnings.warn('There are already observations. New observations will be appended to the end.')
-#             x = self.observations[-1]
-#         else:
-#             x = self.init.sample(param=self.true_param, n=1)
-#         lamb, kappa, delta = self.true_param
-#         alpha = 1
-#
-#         steps = int(np.ceil(np.round(t_max / dt, 7))) + 1
-#         W = np.random.standard_normal(size=(steps - 1, self.dim))
-#         dIG = invgauss_bn(xi=delta * dt, eta=alpha, size=steps - 1, seed=seed)
-#         dNIG = np.sqrt(dIG)[:, None] * W
-#
-#         expQ = np.array([[np.exp(-lamb * dt), 0], [kappa * (np.exp(-kappa * dt) - np.exp(-lamb * dt)) / (lamb - kappa), np.exp(-kappa * dt)]])
-#         X = x
-#         observations = [X]
-#         tr = trange(1, steps, desc='Generating Observations') if verbose == 1 else range(1, steps)
-#         for timestep in tr:
-#             X = expQ @ (X + dNIG[timestep - 1])
-#             if timestep % inter_steps == 0:
-#                 observations.append(X)
-#
-#         observations = np.stack(observations)
-#         if self.observations is not None:
-#             observations = np.vstack((self.observations, observations[1:]))
-#             self.seed = str(self.seed) + '+' + str(seed) if self.seed is not None else seed
-#             t_max = observations.shape[0] - 1
-#         else:
-#             self.seed = seed
-#
-#         if self.seed is not None:
-#             np.savetxt('./saves/OUNIGModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, observations.shape[0] - 1), observations)
-#         else:
-#             np.savetxt('./saves/OUNIGModel/Observations/observations_{}_{}obs.txt'.format(self.savestring, observations.shape[0] - 1), observations)
-#         self.observations = observations
-#
-#
-# # init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-# # # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
-# # # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
-# #
-# # ## Test the new restructuring #1 (Simulation study, no observations needed)
-# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-# heston = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[1, 1])
-# heston.poly_B(param=heston.true_param, poly_order=4, deriv_order=0, wrt=np.array([0, 1, 2, 3]))
-#
-# coefs = []
-# for scaling in tqdm(np.logspace(1, 3.5, 100)):
-#     init = InitialDistribution(dist='Dirac', hyper=[scaling * 0.3**2, scaling**2 * 0.3**4, 0, 0, 0])
-#     heston2 = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=scaling)
-#     coef = np.linalg.inv(heston2.kalman_filter.Sig_tp1_t_lim)[-1, -1] * scaling**8 - np.linalg.inv(heston.kalman_filter.Sig_tp1_t_lim)[-1, -1]
-#     coefs.append(coef)
-#
-# a, A, C = heston.state_space_params(heston.true_param)
-# a2, A2, C2 = heston2.state_space_params(heston2.true_param)
-#
-#
-# heston.poly_B(param=heston.true_param, poly_order=4, deriv_order=2, wrt=np.array([0, 1, 2, 3]))
-# V, Std, Corr = heston.compute_V()
-# #
-# # ou = OUNIGModel(first_observed=1, init=init, dt=1, true_param=np.array([1, 0.5, 1.5]), wrt=2)
-# # V, Std, Corr = ou.compute_V()
-# #
-# # # B = heston.poly_B(heston.true_param, poly_order=1)
-# # tic = time()
-# # a2, A2, C2 = heston.state_space_params(heston.true_param)
-# # toc = time()
-# # print(toc - tic)
-# #
-# # tic = time()
-# # B = heston.poly_B(heston.true_param, poly_order=2, deriv_order=2, wrt=np.array([0, 1, 2, 3]))
-# # toc = time()
-# # print(toc - tic)
-# #
-# # tic = time()
-# # heston.C_lim(heston.true_param)
-# # toc=time()
-# # print(toc - tic)
-# #
-# #
-# # ## Test the new restructuring #2 (Simulation study with observations)
-# heston = HestonModel.from_observations(first_observed=1, init=init, dt=1 / 24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
-# heston.log_lik(np.array([1, 0.16, 0.25, -0.5]), t=200000)
-#
-# fits = []
-# for i in range(5):
-#     print(i)
-#     heston = HestonModel.from_observations(first_observed=1, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=20 + i)
-#     fits.append(heston.fit_qml(fit_parameter=2, initial=0.3, t=200000))
-# heston = HestonModel.from_observations(first_observed=2, init=init, dt=1, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), seed=21)
-# # result = heston.fit_qml(fit_parameter=2, initial=0.3, t=200000)
-# # result = heston.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
-# # V, Std, Corr = heston.compute_V(kind='estimate', wrt=2, verbose=1)
-# #
-# # fits = []
-# # for i in range(10):
-# #     ou = OUNIGModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=10000, inter_steps=250, true_param=np.array([1, 0.5, 1.5]), seed=i)
-# #     fits.append(ou.fit_qml(fit_parameter=1, initial=0.5, t=200000))
-# # V, Std, Corr = ou.compute_V(kind='estimate', wrt=1, verbose=1)
-# #
-# #
-# # ## Test the new restructuring #3 (Semi-Real-world scenario)
-# # heston = HestonModel.from_observations(first_observed=1, init=init, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_seed5_200000obs.txt', dt=1/250, true_param=np.array([1, 0.4**2, np.nan, -0.5]))
-# # result = heston.fit_qml(fit_parameter=2, initial=0.3, t=10000)
-# # result = heston.fit_qml(fit_parameter=2, initial=0.3, t=12000, update_estimate=True)
-# # V, Std, Corr = heston.compute_V(kind='estimate', wrt=2, verbose=1, filter_unobserved=True)
-# # heston.setup_filter(wrt=2)
-# # V, Std, Corr = heston.compute_V()
-# #
-# #
-# # ## Test the new restructuring #3 (Real-world scenario)
-# # heston = HestonModel.from_observations(first_observed=1, init=init, obs='observations_1.000_0.160_0.300_-0.500_seed5_200000obs.txt')
-# # seq = heston.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=200)
-# # res = heston.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
-# #
-# #
-# # ## Heston wrt = 2 --> 82.97s
-# # ## Heston wrt = [2, 3] --> 909.72s
-# # ## Heston wrt = [1, 2, 3] --> 7555.98s
-# # ## Heston wrt = [0, 1, 2, 3] --> 58115.90s
-# # tic = time()
-# # hestonf = FilteredHestonModel(first_observed=1, kappa=1, theta_vol=0.4, sig=0.3, rho=-0.5, v0=0.4**2, wrt=3)
-# # V, Std, Corr = hestonf.calculate_V()
-# # toc = time()
-# # print(toc - tic)
-#
-#
-# ## Monte Carlo Checkup 5d
-#
-# def simulate_heston(samples, T, dt, v0, kappa, theta, sigma, rho, antithetic=False, seed=0):
-#     if 2 * theta * kappa < sigma ** 2:
-#         warnings.warn('Feller Positivity Condition is not met (2 * theta * kappa < sigma**2)')
-#
-#     steps = int(np.ceil(T / dt)) + 1
-#
-#     np.random.seed(seed)
-#     W = np.random.multivariate_normal(mean=[0, 0], cov=[[1, rho], [rho, 1]], size=(samples, steps))
-#     dW1, dW2 = W[:, :, 0] * np.sqrt(dt), W[:, :, 1] * np.sqrt(dt)
-#     if antithetic:
-#         dW1, dW2 = np.vstack((dW1, -dW1)), np.vstack((dW2, -dW2))
-#         samples = 2 * samples
-#     S = np.empty(shape=(samples, steps))
-#     v = np.empty(shape=(samples, steps))
-#     S[:, 0] = 0
-#     v[:, 0] = v0  # InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0]).sample(param=np.array([kappa, theta, sigma, rho]), n=samples)[:, 0]
-#     for timestep in trange(1, steps):
-#         v[:, timestep] = np.maximum(v[:, timestep - 1] + kappa * (theta - v[:, timestep - 1]) * dt + sigma * np.sqrt(v[:, timestep - 1]) * dW1[:, timestep - 1], 0)
-#         S[:, timestep] = S[:, timestep - 1] + np.sqrt(v[:, timestep - 1]) * dW2[:, timestep - 1]
-#     return v, S
-#
-#
-# t0 = 0
-# t = 100
-# dt = 1 / 100
-# v0 = 0.4**2
-# kappa = 1
-# theta = 0.4**2
-# sigma = 0.3
-# rho = -0.5
-#
-# samples = 10000
-#
-# v, S = simulate_heston(samples, t - t0, dt, v0, kappa, theta, sigma, rho)
-# v_final = v[:, ::100]
-# Y_final = np.hstack((np.repeat(0, 10000)[:, None], np.diff(S[:, ::100])))
-# Y_final2 = Y_final**2
-# Y_final4 = Y_final**4
-# observations = np.stack((v_final, v_final**2, Y_final, Y_final**2, Y_final**4), axis=0).T
-#
-# init = InitialDistribution(dist='Dirac', hyper=[v0, v0**2, 0, 0, 0])
-# hestonf = HestonModel(first_observed=1, init=init, dt=1, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
-# filter = hestonf.kalman_filter
-#
-# x = np.array([v0, v0**2, 0, 0, 0])
-# t_max = observations.shape[0]
-# observations = observations[..., filter.first_observed:]
-# X_hat_tp1_t_list_hom = [np.tile(x, (10000, 1)), np.tile(filter.a[0] + filter.A[0] @ x, (10000, 1))]
-# X_hat_tp1_t = X_hat_tp1_t_list_hom[-1]
-# Sig_inv = np.linalg.inv(filter.Sig_tp1_t_lim[filter.first_observed:, filter.first_observed:])
-# Sig_tp1_t_lim_o = filter.Sig_tp1_t_lim[:, filter.first_observed:]
-# tr = tqdm(total=t_max - 1)
-# tr.update(1)
-# for t in range(1, t_max - 1):
-#     X_hat_tt = X_hat_tp1_t + (Sig_tp1_t_lim_o @ Sig_inv @ (observations[t] - X_hat_tp1_t[:, filter.first_observed:]).T).T
-#     X_hat_tp1_t = filter.a[0] + (filter.A[0] @ X_hat_tt.T).T
-#     X_hat_tp1_t_list_hom.append(X_hat_tp1_t)
-#     tr.update(1)
-# tr.close()
-#
-# X_hat_tp1_t = np.stack(X_hat_tp1_t_list_hom, axis=0)
-# X_hat_tp1_t_final = X_hat_tp1_t[-1]
-# obs_final = np.stack((v_final, v_final**2, Y_final, Y_final**2, Y_final**4), axis=0).T[-1]
-# aug_final = np.hstack((obs_final, X_hat_tp1_t_final))
-#
-#
-# ## Monte Carlo Checkup 3d
-#
-# def simulate_heston(samples, T, dt, v0, kappa, theta, sigma, rho, antithetic=False, seed=0):
-#     if 2 * theta * kappa < sigma ** 2:
-#         warnings.warn('Feller Positivity Condition is not met (2 * theta * kappa < sigma**2)')
-#
-#     steps = int(np.ceil(T / dt)) + 1
-#
-#     np.random.seed(seed)
-#     W = np.random.multivariate_normal(mean=[0, 0], cov=[[1, rho], [rho, 1]], size=(samples, steps))
-#     dW1, dW2 = W[:, :, 0] * np.sqrt(dt), W[:, :, 1] * np.sqrt(dt)
-#     if antithetic:
-#         dW1, dW2 = np.vstack((dW1, -dW1)), np.vstack((dW2, -dW2))
-#         samples = 2 * samples
-#     S = np.empty(shape=(samples, steps))
-#     v = np.empty(shape=(samples, steps))
-#     S[:, 0] = 0
-#     v[:, 0] = v0  # InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0]).sample(param=np.array([kappa, theta, sigma, rho]), n=samples)[:, 0]
-#     for timestep in trange(1, steps):
-#         v[:, timestep] = np.maximum(v[:, timestep - 1] + kappa * (theta - v[:, timestep - 1]) * dt + sigma * np.sqrt(v[:, timestep - 1]) * dW1[:, timestep - 1], 0)
-#         S[:, timestep] = S[:, timestep - 1] + np.sqrt(v[:, timestep - 1]) * dW2[:, timestep - 1]
-#     return v, S
-#
-#
-# t0 = 0
-# t = 100
-# dt = 1 / 100
-# v0 = 0.4**2
-# kappa = 1
-# theta = 0.4**2
-# sigma = 0.3
-# rho = -0.5
-#
-# samples = 10000
-#
-# v, S = simulate_heston(samples, t - t0, dt, v0, kappa, theta, sigma, rho)
-# v_final = v[:, ::100]
-# Y_final = np.hstack((np.repeat(0, 10000)[:, None], np.diff(S[:, ::100])))
-# observations = np.stack((v_final, Y_final, Y_final**2), axis=0).T
-#
-# init = InitialDistribution(dist='Dirac', hyper=[v0, 0, 0])
-# hestonf = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
-# filter = hestonf.kalman_filter
-#
-# x = np.array([v0, 0, 0])
-# t_max = observations.shape[0]
-# observations = observations[..., filter.first_observed:]
-# X_hat_tp1_t_list_hom = [np.tile(x, (10000, 1)), np.tile(filter.a[0] + filter.A[0] @ x, (10000, 1))]
-# X_hat_tp1_t = X_hat_tp1_t_list_hom[-1]
-# Sig_inv = np.linalg.inv(filter.Sig_tp1_t_lim[filter.first_observed:, filter.first_observed:])
-# Sig_tp1_t_lim_o = filter.Sig_tp1_t_lim[:, filter.first_observed:]
-# tr = tqdm(total=t_max - 1)
-# tr.update(1)
-# for t in range(1, t_max - 1):
-#     X_hat_tt = X_hat_tp1_t + (Sig_tp1_t_lim_o @ Sig_inv @ (observations[t] - X_hat_tp1_t[:, filter.first_observed:]).T).T
-#     X_hat_tp1_t = filter.a[0] + (filter.A[0] @ X_hat_tt.T).T
-#     X_hat_tp1_t_list_hom.append(X_hat_tp1_t)
-#     tr.update(1)
-# tr.close()
-#
-# X_hat_tp1_t = np.stack(X_hat_tp1_t_list_hom, axis=0)
-# X_hat_tp1_t_final = X_hat_tp1_t[-1]
-# obs_final = np.stack((v_final, Y_final, Y_final**2), axis=0).T[-1]
-# aug_final = np.hstack((obs_final, X_hat_tp1_t_final))
+    def poly_A(self, param, poly_order, deriv_order=0, wrt=None):
+        if poly_order > 4:
+            raise Exception('Polynomial orders greater than 4 have not been implemented yet.')
+
+        wrt = np.atleast_1d(wrt)
+        lamb, kappa, delta = param
+        alpha = 1
+        dicts = return_dict(self.dim_c, poly_order)
+        k = np.size(wrt)
+        n_components = 1 + k * (deriv_order >= 1) + int(k * (k + 1) / 2) * (deriv_order == 2)
+
+        OU_A = np.zeros((n_components, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
+        OU_A[0, mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -lamb
+        OU_A[0, mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = kappa
+        OU_A[0, mult_to_ind([0, 1], dicts), mult_to_ind([0, 1], dicts)] = -kappa
+        OU_A[0, mult_to_ind([2, 2], dicts), 0] = delta / alpha ** 3
+        OU_A[0, mult_to_ind([2, 0], dicts), 0] = delta / alpha
+        OU_A[0, mult_to_ind([0, 2], dicts), 0] = delta / alpha
+        OU_A[0, mult_to_ind([4, 0], dicts), 0] = 3 * delta / alpha ** 3
+        OU_A[0, mult_to_ind([0, 4], dicts), 0] = 3 * delta / alpha ** 3
+
+        if deriv_order >= 1:
+            deriv_A = np.zeros((3, n_dim(self.dim_c, poly_order), n_dim(self.dim_c, poly_order)))
+            deriv_A[0, mult_to_ind([1, 0], dicts), mult_to_ind([1, 0], dicts)] = -1
+            deriv_A[1, mult_to_ind([0, 1], dicts), mult_to_ind([1, 0], dicts)] = 1
+            deriv_A[1, mult_to_ind([0, 1], dicts), mult_to_ind([0, 1], dicts)] = -1
+            deriv_A[2, mult_to_ind([2, 2], dicts), 0] = 1 / alpha ** 3
+            deriv_A[2, mult_to_ind([2, 0], dicts), 0] = 1 / alpha
+            deriv_A[2, mult_to_ind([0, 2], dicts), 0] = 1 / alpha
+            deriv_A[2, mult_to_ind([4, 0], dicts), 0] = 3 / alpha ** 3
+            deriv_A[2, mult_to_ind([0, 4], dicts), 0] = 3 / alpha ** 3
+            OU_A[1:(1 + k)] = deriv_A[wrt]
+
+        return OU_A.squeeze()
+
+    def generate_observations(self, t_max, inter_steps, seed=None, verbose=0):
+        dt = self.dt / inter_steps
+
+        if seed is not None:
+            np.random.seed(seed)
+
+        if not isinstance(inter_steps, int):
+            raise TypeError('Attribute inter_steps needs to be integer.')
+
+        if np.isnan(self.true_param).any():
+            raise Exception('Full underlying parameter has to be given or has to be estimated first.')
+
+        if self.observations is not None:
+            warnings.warn('There are already observations. New observations will be appended to the end.')
+            x = self.observations[-1]
+        else:
+            x = self.init.sample(param=self.true_param, n=1)
+        lamb, kappa, delta = self.true_param
+        alpha = 1
+
+        steps = int(np.ceil(np.round(t_max / dt, 7))) + 1
+        W = np.random.standard_normal(size=(steps - 1, self.dim))
+        dIG = invgauss_bn(xi=delta * dt, eta=alpha, size=steps - 1, seed=seed)
+        dNIG = np.sqrt(dIG)[:, None] * W
+
+        expQ = np.array([[np.exp(-lamb * dt), 0], [kappa * (np.exp(-kappa * dt) - np.exp(-lamb * dt)) / (lamb - kappa), np.exp(-kappa * dt)]])
+        X = x
+        observations = [X]
+        tr = trange(1, steps, desc='Generating Observations') if verbose == 1 else range(1, steps)
+        for timestep in tr:
+            X = expQ @ (X + dNIG[timestep - 1])
+            if timestep % inter_steps == 0:
+                observations.append(X)
+
+        observations = np.stack(observations)
+        if self.observations is not None:
+            observations = np.vstack((self.observations, observations[1:]))
+            self.seed = str(self.seed) + '+' + str(seed) if self.seed is not None else seed
+            t_max = observations.shape[0] - 1
+        else:
+            self.seed = seed
+
+        if self.seed is not None:
+            np.savetxt('./saves/OUNIGModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, observations.shape[0] - 1), observations)
+        else:
+            np.savetxt('./saves/OUNIGModel/Observations/observations_{}_{}obs.txt'.format(self.savestring, observations.shape[0] - 1), observations)
+        self.observations = observations
+
+
+
+## Define suitable initial distribution
+init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
+init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
+
+
+## Test the calculation of asymptotic covariances #1 (No observations needed)
+model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
+model = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
+model = HestonModel(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140])
+model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 1.5]), wrt=2)
+
+V, Std, Corr = model.compute_V()
+
+
+## Test the estimation #2 (Simulation study with observations)
+model = HestonModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
+model = HestonModel.from_observations(first_observed=1, init=init, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
+model = HestonModel.from_observations(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
+model = OUNIGModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=200000, inter_steps=250, true_param=np.array([1, 0.5, 1.5]), seed=0)
+
+result = model.fit_qml(fit_parameter=2, initial=0.3, t=200000)
+result = model.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
+V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
+
+fits = []
+for i in range(5):
+    model = HestonModel.from_observations(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), scaling=[20, 140], seed=20 + i)
+    fits.append(model.fit_qml(fit_parameter=2, initial=0.3, t=200000))
+
+
+## Test the estimation #3 (Semi-Real-world scenario; observations externally given, just one parameter unknown)
+model = HestonModel.from_observations(first_observed=1, init=init, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_seed5_200000obs.txt', dt=1/250, true_param=np.array([1, 0.4**2, np.nan, -0.5]))
+
+result = model.fit_qml(fit_parameter=2, initial=0.3, t=10000)
+result = model.fit_qml(fit_parameter=2, initial=0.3, t=12000, update_estimate=True)
+V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
+
+model.setup_filter(wrt=2)
+V, Std, Corr = model.compute_V()
+
+
+## Test the new restructuring #3 (Real-world scenario; observations externally given, all parameters unknown)
+model = HestonModel.from_observations(first_observed=1, init=init, obs='observations_1.000_0.160_0.300_-0.500_seed5_200000obs.txt')
+seq = model.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=10000)
+res = model.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
+
+
+## Calculation times for polynomial matrices
+## Heston_sig1[1]_2d[1, 2], wrt = 2 --> 82.97s
+## Heston_sig1[1]_2d[1, 2], wrt = [2, 3] --> 909.72s
+## Heston_sig1[1]_2d[1, 2], wrt = [1, 2, 3] --> 7555.98s
+## Heston_sig1[1]_2d[1, 2], wrt = [0, 1, 2, 3] --> 58115.90s
