@@ -256,7 +256,7 @@ class KalmanFilter:
 
 
 class PolynomialModel:
-    def __init__(self, first_observed, init, dt, signature, params_names, params_bounds=None, true_param=None, wrt=None, scaling=1):
+    def __init__(self, first_observed, init, dt, signature, params_names, params_bounds=None, true_param=None, wrt=None, scaling=1, warn=True):
         self.first_observed = first_observed
 
         if true_param is None:
@@ -286,7 +286,7 @@ class PolynomialModel:
         self.W = None
         self.kalman_filter = None
 
-        if 'd' in signature:
+        if 'd' in signature and warn:
             warnings.warn('The current implementation of differenced components assumes that no other components depend on these.')
         self.signature_string = signature
         signature = signature.split('_')
@@ -328,7 +328,7 @@ class PolynomialModel:
             self.savestring = 'par=[' + ', '.join('{:.3f}'.format(item) for item in true_param) + ']_dt={:.1e}_sig{}_sc['.format(self.dt, self.signature_string) + ', '.join('{:.1f}'.format(sc) for sc in self.scaling) + ']'
             if wrt is not None:
                 self.setup_filter(wrt)
-        elif wrt is not None:
+        elif wrt is not None and warn:
             warnings.warn('Argument wrt was not used since the whole parameter has not yet been estimated. Please use method "setup_filter" after this has been done.', Warning)
 
     def state_space_params(self, param, deriv_order=0, wrt=None, return_stack=False):
@@ -685,14 +685,14 @@ class PolynomialModel:
         third_row_Y2 = [np.vstack(A_20), block, np.kron(np.eye(int(k * (k + 1) / 2)), A_22)]
         self.filter_Y2 = np.block([first_row_Y2, second_row_Y2, third_row_Y2])
 
-        filepath_B4 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+        filepath_B4 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices1/B4{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)  # TODO
         if os.path.exists(filepath_B4):
             self.filter_B4 = np.loadtxt(filepath_B4)
             self.lim_expec4 = np.append(1, np.linalg.inv(np.eye(self.filter_B4.shape[0] - 1) - self.filter_B4[1:, 1:]) @ self.filter_B4[1:, 0])
         else:
             self.calc_filter_B(poly_order=4)
 
-        filepath_B2 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+        filepath_B2 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices1/B2{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)  # TODO
         if os.path.exists(filepath_B2):
             self.filter_B2 = np.loadtxt(filepath_B2)
             self.lim_expec2 = np.append(1, np.linalg.inv(np.eye(self.filter_B2.shape[0] - 1) - self.filter_B2[1:, 1:]) @ self.filter_B2[1:, 0])
@@ -1250,10 +1250,10 @@ class PolynomialModel:
 
 
 class HestonModel(PolynomialModel):
-    def __init__(self, first_observed, init, dt, signature, true_param=None, wrt=None, scaling=1):
+    def __init__(self, first_observed, init, dt, signature, true_param=None, wrt=None, scaling=1, warn=True):
         params_names = np.array(['kappa', 'theta', 'sigma', 'rho'])
         params_bounds = np.array([[0.0001, 10], [0.0001 ** 2, 1], [0.0001, 1], [-1, 1]])
-        super().__init__(first_observed, init, dt, signature, params_names, params_bounds, true_param, wrt, scaling)
+        super().__init__(first_observed, init, dt, signature, params_names, params_bounds, true_param, wrt, scaling, warn)
 
     def poly_A(self, param, poly_order, deriv_order=0, wrt=None):
         wrt = np.atleast_1d(wrt)
@@ -1355,10 +1355,10 @@ class HestonModel(PolynomialModel):
 
 
 class OUNIGModel(PolynomialModel):
-    def __init__(self, first_observed, init, dt, signature, true_param=None, wrt=None, scaling=1):
+    def __init__(self, first_observed, init, dt, signature, true_param=None, wrt=None, scaling=1, warn=True):
         params_names = np.array(['lambda', 'kappa', 'delta'])
         params_bounds = np.array([[0.001, 10], [0.0001, 30], [0.0001, 10]])
-        super().__init__(first_observed, init, dt, signature, params_names, params_bounds, true_param, wrt, scaling)
+        super().__init__(first_observed, init, dt, signature, params_names, params_bounds, true_param, wrt, scaling, warn)
 
     def poly_A(self, param, poly_order, deriv_order=0, wrt=None):
         if poly_order > 4:
@@ -1453,7 +1453,7 @@ init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 
 ## Test the calculation of asymptotic covariances #1 (No observations needed)
-model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
+model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)
 model = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2)
 model = HestonModel(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140])
 model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 1.5]), wrt=2)
