@@ -6,10 +6,12 @@ from itertools import product, compress
 from pathlib import Path
 from time import time
 
+from joblib import Parallel, delayed, cpu_count
 from scipy.linalg import expm, expm_frechet
 from scipy.optimize import minimize
 from scipy.special import factorial
 from tqdm import tqdm, trange
+from tqdm_joblib import tqdm_joblib
 
 from functions import *
 
@@ -479,6 +481,7 @@ class PolynomialModel:
         else:
             raise Exception('Argument order has to be 4 or 2.')
 
+        tic = time()
         k, d = C.shape
         B = self.poly_B(param=self.true_param, poly_order=poly_order)
         if np.any(c):
@@ -487,9 +490,10 @@ class PolynomialModel:
             c = np.append(c, 1)[:, None]
             Y = np.hstack((Y, c))
             k += 1
-            t = tqdm(total=2 * n_dim(k, poly_order) + n_dim(d + k, poly_order) + n_dim(d + k - 1, poly_order), desc='Calculating S')
-        else:
-            t = tqdm(total=2 * n_dim(k, poly_order) + n_dim(d + k, poly_order), desc='Calculating S')
+        #     t = tqdm(total=2 * n_dim(k, poly_order) + n_dim(d + k, poly_order) + n_dim(d + k - 1, poly_order), desc='Calculating S')
+        # else:
+        #     t = tqdm(total=2 * n_dim(k, poly_order) + n_dim(d + k, poly_order), desc='Calculating S')
+        t = tqdm(total=2 * n_dim(k, poly_order), desc='Calculating S')
 
         dictd = return_dict(d, poly_order)
         dictk = return_dict(k, poly_order)
@@ -550,43 +554,91 @@ class PolynomialModel:
                     large_solution[np.ix_(np.arange(sol[j].shape[0]), locations1[i], locations2[j])] = sol[j]
                     S[i, j] = np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
 
+            # index_in_raw_comb = np.array([np.where((raw_combinations == np.expand_dims(np.array([collections1[coll_locator1[I[:, i]]], collections2[coll_locator2[J[:, i]]]]).T, -2)).all(-1))[-1] for i in range(n_dim(dim1, order))])
+            # sol_locator = raw_comb_locator[index_in_raw_comb]
+            # sol = solutions[sol_locator]
+            #
+            # def get_S_entry(i, j):
+            #     if sol_locator[i, j] == -1:
+            #         return i, j, 0
+            #     else:
+            #         large_solution = np.zeros((sol[i, j].shape[0], dim1, dim2))
+            #         large_solution[np.ix_(np.arange(sol[i, j].shape[0]), locations1[i], locations2[j])] = sol[i, j]
+            #         return i, j, np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
+            #
+            # result = [get_S_entry(i, j) for i in range(n_dim(dim1, order)) for j in range(n_dim(dim2, order))]
+            #
+            # # result = Parallel(n_jobs=cpu_count(), prefer='threads')(delayed(get_S_entry)(i, j) for i in trange(n_dim(dim1, order)) for j in range(n_dim(dim2, order)))
+            # result = np.array(result)
+            # S[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
+
             S[0, 0] = 1
             return S
 
-        S_mat = S_func(Y, poly_order)
-        S_mat_d = S_func(C, poly_order)
+        def get_mu(i):
+            large_ind = dict_large[i]
+            mu_inds, mu_locs = dict_large[mask(large_ind, dict_large, typ='leq_abs')], np.where(mask(large_ind, dict_large, typ='leq_abs'))[0]
+            return mu_inds, mu_locs
 
-        t.set_description('Calculating B')
-        for i in range(dict_large.shape[0]):
-            t.update(1)
+        def get_B_entry_from_mu(i, mu_ind, mu_loc):
             large_ind = dict_large[i]
             lamb, lamb_tilde = np.split(large_ind, [d])
             lamb_ind = mult_to_ind(lamb, dictd)
-            mu_inds, mu_locs = dict_large[mask(large_ind, dict_large, typ='leq_abs')], np.where(mask(large_ind, dict_large, typ='leq_abs'))[0]
-            for mu_ind, mu_loc in zip(mu_inds, mu_locs):
-                mu, mu_tild = np.split(mu_ind, [d])
-                mu_tild_ind = mult_to_ind(mu_tild, dictk)
-                nus, nus_ind = dictd[mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')], np.where(mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs'))[0]
-                etas, etas_ind = dictk[mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs')], np.where(mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs'))[0]
-                lamb_eta_ind = mult_to_ind(lamb_tilde - etas, dictk)
-                mu_nu_ind = mult_to_ind(mu - nus, dictd)
-                prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
-                B_large[i, mu_loc] = np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
+            mu, mu_tild = np.split(mu_ind, [d])
+            mu_tild_ind = mult_to_ind(mu_tild, dictk)
+            nus, nus_ind = dictd[mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')], np.where(mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs'))[0]
+            etas, etas_ind = dictk[mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs')], np.where(mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs'))[0]
+            lamb_eta_ind = mult_to_ind(lamb_tilde - etas, dictk)
+            mu_nu_ind = mult_to_ind(mu - nus, dictd)
+            prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
+            return i, mu_loc, np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
+
+        S_mat = S_func(Y, poly_order)
+        S_mat_d = S_func(C, poly_order)
+        t.close()
+
+        # t.set_description('Calculating B')
+        # tic = time()
+        # for i in trange(dict_large.shape[0]):
+        #     mu_inds, mu_locs = get_mu(i)
+        #     for mu_ind, mu_loc in zip(mu_inds, mu_locs):
+        #         B_large[i, mu_loc] = get_B_entry_from_mu(i, mu_ind, mu_loc)[2]
+        # toc = time()
+        # print(toc - tic)
+
+        result = Parallel(n_jobs=cpu_count())(delayed(get_B_entry_from_mu)(i, mu_ind, mu_loc) for i in trange(dict_large.shape[0], desc='Calculating B') for mu_ind, mu_loc in zip(*get_mu(i)))
+        result = np.array(result)
+        B_large[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
 
         if np.any(c):
             B_final = np.zeros((n_dim(d + k - 1, poly_order), n_dim(d + k - 1, poly_order)))
             dict_final = return_dict(d + k - 1, poly_order)
-            t.set_description('Incorporating c')
-            for i in range(n_dim(d + k - 1, poly_order)):
-                t.update(1)
+
+            def get_mu_final(i):
                 lamb_ind = dict_final[i]
                 mu_inds, mu_locs = dict_final[mask(lamb_ind, dict_final, typ='leq_abs')], np.where(mask(lamb_ind, dict_final, typ='leq_abs'))[0]
-                for mu_ind, mu_loc in zip(mu_inds, mu_locs):
-                    B_final[i, mu_loc] = B_large[mult_to_ind(np.append(lamb_ind, 0), dict_large), np.where((dict_large[:, :-1] == np.atleast_2d(mu_ind)[:, None]).all(-1))[1]].sum()
+                return mu_inds, mu_locs
+
+            def get_B_final_from_mu(i, mu_ind, mu_loc):
+                lamb_ind = dict_final[i]
+                return i, mu_loc, B_large[mult_to_ind(np.append(lamb_ind, 0), dict_large), np.where((dict_large[:, :-1] == np.atleast_2d(mu_ind)[:, None]).all(-1))[1]].sum()
+
+            # t.set_description('Incorporating c')
+            # for i in trange(n_dim(d + k - 1, poly_order)):
+            #     mu_inds, mu_locs = get_mu_final(i)
+            #     for mu_ind, mu_loc in zip(mu_inds, mu_locs):
+            #         B_final[i, mu_loc] = get_B_final_from_mu(i, mu_ind, mu_loc)[2]
+
+            result = Parallel(n_jobs=cpu_count())(delayed(get_B_final_from_mu)(i, mu_ind, mu_loc) for i in trange(n_dim(d + k - 1, poly_order), desc='Incorporating c') for mu_ind, mu_loc in zip(*get_mu_final(i)))
+            result = np.array(result)
+            B_final[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
         else:
             B_final = B_large
+        toc = time()
+        print(toc - tic)
+        raise(Exception)
 
-        t.set_description('Calculating limiting power expectations')
+        # t.set_description('Calculating limiting power expectations')
         if poly_order == 4:
             self.filter_B4 = B_final
             self.lim_expec4 = np.append(1, np.linalg.inv(np.eye(B_final.shape[0] - 1) - B_final[1:, 1:]) @ B_final[1:, 0])
@@ -685,14 +737,14 @@ class PolynomialModel:
         third_row_Y2 = [np.vstack(A_20), block, np.kron(np.eye(int(k * (k + 1) / 2)), A_22)]
         self.filter_Y2 = np.block([first_row_Y2, second_row_Y2, third_row_Y2])
 
-        filepath_B4 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B4{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+        filepath_B4 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices1/B4{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)  # TODO
         if os.path.exists(filepath_B4):
             self.filter_B4 = np.loadtxt(filepath_B4)
             self.lim_expec4 = np.append(1, np.linalg.inv(np.eye(self.filter_B4.shape[0] - 1) - self.filter_B4[1:, 1:]) @ self.filter_B4[1:, 0])
         else:
             self.calc_filter_B(poly_order=4)
 
-        filepath_B2 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices/B2{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)
+        filepath_B2 = './saves/' + self.__class__.__name__ + '/Polynomial Matrices1/B2{}_m={}_{}.txt'.format(np.atleast_1d(self.wrt).tolist(), self.first_observed, self.savestring)  # TODO
         if os.path.exists(filepath_B2):
             self.filter_B2 = np.loadtxt(filepath_B2)
             self.lim_expec2 = np.append(1, np.linalg.inv(np.eye(self.filter_B2.shape[0] - 1) - self.filter_B2[1:, 1:]) @ self.filter_B2[1:, 0])
@@ -1447,9 +1499,9 @@ class OUNIGModel(PolynomialModel):
 
 ## Define suitable initial distribution
 init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
-init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
+# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+# init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
+# init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 
 ## Test the calculation of asymptotic covariances #1 (No observations needed)

@@ -20,7 +20,18 @@ def batch_simulation(N_batch, seed):
 
 def batch_simulation_simple(seed):
     np.random.seed(seed)
+    print(seed)
     return np.random.weibull(a=100, size=(1000, 1000))[:10, :10]
+
+
+B = np.ones(shape=(1000, 10, 10))
+
+
+def batch_simulation_set(seed):
+    global B
+    np.random.seed(seed)
+    B[seed] = np.random.weibull(a=100, size=(1000, 1000))[:10, :10]
+
 
 
 def batch_simulation_simple_joblib(seed, pbar):
@@ -75,8 +86,16 @@ def full_simulation_simple(N_sim):
 
 def full_simulation_simple_joblib(N_sim):
     # multiprocessing magic
-    results = Parallel(n_jobs=N_processes)(delayed(batch_simulation_simple)(seed) for seed in trange(N_sim) for i in range(int(np.log(seed + 1))))
+    results = Parallel(n_jobs=N_processes)(delayed(batch_simulation_simple)(seed) for seed in range(N_sim))
     return results
+
+
+def full_simulation_set_joblib(N_sim):
+    # multiprocessing magic
+    global B
+    results = Parallel(n_jobs=N_processes)(delayed(batch_simulation_simple)(seed) for seed in trange(N_sim))
+    for i, result in enumerate(results):
+        B[i] = result
 
 
 def full_simulation_inpu():
@@ -109,14 +128,15 @@ if __name__ == '__main__':
 
     tic = time()
     # for i in range(100):
-    #     # results = batch_simulation(10, seed=7)
+    #     batch_simulation_set(seed=i)
     # results = batch_simulation_simple(seed=1000)
     # results = full_simulation_test(10)
     # results = full_simulation(1, 1000)
-    # results = full_simulation_simple(1000)
     results = full_simulation_simple_joblib(1000)
-    # N = 10
+    # full_simulation_set_joblib(1000)
+    # N = 1
     # results = full_simulation_test_simple(int(1000 * N))
     # results = full_simulation_inpu()
     toc = time()
     print((toc - tic))
+    # print(B)
