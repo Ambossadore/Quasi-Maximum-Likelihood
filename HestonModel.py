@@ -481,7 +481,6 @@ class PolynomialModel:
         else:
             raise Exception('Argument order has to be 4 or 2.')
 
-        tic = time()
         k, d = C.shape
         B = self.poly_B(param=self.true_param, poly_order=poly_order)
         if np.any(c):
@@ -493,7 +492,7 @@ class PolynomialModel:
         #     t = tqdm(total=2 * n_dim(k, poly_order) + n_dim(d + k, poly_order) + n_dim(d + k - 1, poly_order), desc='Calculating S')
         # else:
         #     t = tqdm(total=2 * n_dim(k, poly_order) + n_dim(d + k, poly_order), desc='Calculating S')
-        t = tqdm(total=2 * n_dim(k, poly_order), desc='Calculating S')
+        # t = tqdm(total=2 * n_dim(k, poly_order), desc='Calculating S')
 
         dictd = return_dict(d, poly_order)
         dictk = return_dict(k, poly_order)
@@ -540,37 +539,34 @@ class PolynomialModel:
 
             I, J = np.meshgrid(np.arange(n_dim(dim1, order)), np.arange(n_dim(dim2, order)))
             S = np.zeros((n_dim(dim1, order), n_dim(dim2, order)))
-            for i in range(n_dim(dim1, order)):
-                t.update(1)
-                index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections1[coll_locator1[I[:, i]]], collections2[coll_locator2[J[:, i]]]]).T, -2)).all(-1))[-1]
-                sol_locator = raw_comb_locator[index_in_raw_comb]
+            # for i in trange(n_dim(dim1, order)):
+            #     # t.update(1)
+            #     index_in_raw_comb = np.where((raw_combinations == np.expand_dims(np.array([collections1[coll_locator1[I[:, i]]], collections2[coll_locator2[J[:, i]]]]).T, -2)).all(-1))[-1]
+            #     sol_locator = raw_comb_locator[index_in_raw_comb]
+            #
+            #     sol = solutions[sol_locator]
+            #     for j in range(n_dim(dim2, order=order)):
+            #         if sol_locator[j] == -1:
+            #             S[i, j] = 0
+            #             continue
+            #         large_solution = np.zeros((sol[j].shape[0], dim1, dim2))
+            #         large_solution[np.ix_(np.arange(sol[j].shape[0]), locations1[i], locations2[j])] = sol[j]
+            #         S[i, j] = np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
 
-                sol = solutions[sol_locator]
-                for j in range(n_dim(dim2, order=order)):
-                    if sol_locator[j] == -1:
-                        S[i, j] = 0
-                        continue
-                    large_solution = np.zeros((sol[j].shape[0], dim1, dim2))
-                    large_solution[np.ix_(np.arange(sol[j].shape[0]), locations1[i], locations2[j])] = sol[j]
-                    S[i, j] = np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
+            index_in_raw_comb = np.array([np.where((raw_combinations == np.expand_dims(np.array([collections1[coll_locator1[I[:, i]]], collections2[coll_locator2[J[:, i]]]]).T, -2)).all(-1))[-1] for i in range(n_dim(dim1, order))])
+            sol_locator = raw_comb_locator[index_in_raw_comb]
+            sol = solutions[sol_locator]
+            i_s, j_s = np.where(sol_locator != -1)
 
-            # index_in_raw_comb = np.array([np.where((raw_combinations == np.expand_dims(np.array([collections1[coll_locator1[I[:, i]]], collections2[coll_locator2[J[:, i]]]]).T, -2)).all(-1))[-1] for i in range(n_dim(dim1, order))])
-            # sol_locator = raw_comb_locator[index_in_raw_comb]
-            # sol = solutions[sol_locator]
-            #
-            # def get_S_entry(i, j):
-            #     if sol_locator[i, j] == -1:
-            #         return i, j, 0
-            #     else:
-            #         large_solution = np.zeros((sol[i, j].shape[0], dim1, dim2))
-            #         large_solution[np.ix_(np.arange(sol[i, j].shape[0]), locations1[i], locations2[j])] = sol[i, j]
-            #         return i, j, np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
-            #
-            # result = [get_S_entry(i, j) for i in range(n_dim(dim1, order)) for j in range(n_dim(dim2, order))]
-            #
-            # # result = Parallel(n_jobs=cpu_count(), prefer='threads')(delayed(get_S_entry)(i, j) for i in trange(n_dim(dim1, order)) for j in range(n_dim(dim2, order)))
-            # result = np.array(result)
-            # S[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
+            def get_S_entry(i, j):
+                large_solution = np.zeros((sol[i, j].shape[0], dim1, dim2))
+                large_solution[np.ix_(np.arange(sol[i, j].shape[0]), locations1[i], locations2[j])] = sol[i, j]
+                return i, j, np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
+
+            result = [get_S_entry(i, j) for i, j in tqdm(zip(i_s, j_s), total=len(i_s), desc='Calculating S')]
+            # result = Parallel(n_jobs=cpu_count())(delayed(get_S_entry)(i, j) for i, j in tqdm(zip(i_s, j_s), total=len(i_s)))
+            result = np.array(result)
+            S[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
 
             S[0, 0] = 1
             return S
@@ -595,7 +591,7 @@ class PolynomialModel:
 
         S_mat = S_func(Y, poly_order)
         S_mat_d = S_func(C, poly_order)
-        t.close()
+        # t.close()
 
         # t.set_description('Calculating B')
         # tic = time()
@@ -634,9 +630,6 @@ class PolynomialModel:
             B_final[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
         else:
             B_final = B_large
-        toc = time()
-        print(toc - tic)
-        raise(Exception)
 
         # t.set_description('Calculating limiting power expectations')
         if poly_order == 4:
