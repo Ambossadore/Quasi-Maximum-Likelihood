@@ -11,7 +11,6 @@ from scipy.linalg import expm, expm_frechet
 from scipy.optimize import minimize
 from scipy.special import factorial
 from tqdm import tqdm, trange
-from tqdm_joblib import tqdm_joblib
 
 from functions import *
 
@@ -481,6 +480,7 @@ class PolynomialModel:
         else:
             raise Exception('Argument order has to be 4 or 2.')
 
+        tic = time()
         k, d = C.shape
         B = self.poly_B(param=self.true_param, poly_order=poly_order)
         if np.any(c):
@@ -564,7 +564,7 @@ class PolynomialModel:
                 return i, j, np.prod(multinom(large_solution) * mult_pow(trans, large_solution), axis=1).sum()
 
             result = [get_S_entry(i, j) for i, j in tqdm(zip(i_s, j_s), total=len(i_s), desc='Calculating S')]
-            # result = Parallel(n_jobs=cpu_count())(delayed(get_S_entry)(i, j) for i, j in tqdm(zip(i_s, j_s), total=len(i_s)))
+            # result = Parallel(n_jobs=16)(delayed(get_S_entry)(i, j) for i, j in tqdm(zip(i_s, j_s), total=len(i_s)))
             result = np.array(result)
             S[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
 
@@ -580,7 +580,7 @@ class PolynomialModel:
             large_ind = dict_large[i]
             lamb, lamb_tilde = np.split(large_ind, [d])
             lamb_ind = mult_to_ind(lamb, dictd)
-            mu, mu_tild = np.split(mu_ind, [d])
+            mu, mu_tild = np.split(mu_ind, [d])  # np.split(mu_inds, [d], axis=-1)
             mu_tild_ind = mult_to_ind(mu_tild, dictk)
             nus, nus_ind = dictd[mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')], np.where(mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs'))[0]
             etas, etas_ind = dictk[mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs')], np.where(mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs'))[0]
@@ -588,6 +588,22 @@ class PolynomialModel:
             mu_nu_ind = mult_to_ind(mu - nus, dictd)
             prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
             return i, mu_loc, np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)])
+
+        def get_B_entry_from_mus(i, mu_inds, mu_locs):
+            results = []
+            large_ind = dict_large[i]
+            lamb, lamb_tilde = np.split(large_ind, [d])
+            lamb_ind = mult_to_ind(lamb, dictd)
+            for mu_ind, mu_loc in zip(mu_inds, mu_locs):
+                mu, mu_tild = np.split(mu_ind, [d])  # np.split(mu_inds, [d], axis=-1)
+                mu_tild_ind = mult_to_ind(mu_tild, dictk)
+                nus, nus_ind = dictd[mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs')], np.where(mask(mu, dictd, typ='leq') & mask(lamb_tilde - mu_tild, dictd, typ='eq_abs'))[0]
+                etas, etas_ind = dictk[mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs')], np.where(mask(lamb_tilde, dictk, typ='leq') & mask(lamb_tilde - mu_tild, dictk, typ='eq_abs'))[0]
+                lamb_eta_ind = mult_to_ind(lamb_tilde - etas, dictk)
+                mu_nu_ind = mult_to_ind(mu - nus, dictd)
+                prods, prods_int, prods_int2 = product(nus, etas), product(nus_ind, etas_ind), product(mu_nu_ind, lamb_eta_ind)
+                results.append(np.sum([multi_binom(lamb_tilde, prod[1]) * S_mat[prod_int2[1], mu_tild_ind] * S_mat_d[prod_int[1], prod_int[0]] * B[lamb_ind, prod_int2[0]] for prod, prod_int, prod_int2 in zip(prods, prods_int, prods_int2)]))
+            return np.vstack((np.repeat(i, len(mu_locs)), mu_locs, np.array(results)))
 
         S_mat = S_func(Y, poly_order)
         S_mat_d = S_func(C, poly_order)
@@ -602,8 +618,10 @@ class PolynomialModel:
         # toc = time()
         # print(toc - tic)
 
-        result = Parallel(n_jobs=cpu_count())(delayed(get_B_entry_from_mu)(i, mu_ind, mu_loc) for i in trange(dict_large.shape[0], desc='Calculating B') for mu_ind, mu_loc in zip(*get_mu(i)))
-        result = np.array(result)
+        # result = Parallel(n_jobs=32)(delayed(get_B_entry_from_mu)(i, mu_ind, mu_loc) for i in trange(dict_large.shape[0], desc='Calculating B') for mu_ind, mu_loc in zip(*get_mu(i)))
+        result = Parallel(n_jobs=cpu_count())(delayed(get_B_entry_from_mus)(i, *get_mu(i)) for i in trange(dict_large.shape[0], desc='Calculating B'))
+        # result = np.array(result)
+        result = np.hstack(result).T
         B_large[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
 
         if np.any(c):
@@ -619,18 +637,30 @@ class PolynomialModel:
                 lamb_ind = dict_final[i]
                 return i, mu_loc, B_large[mult_to_ind(np.append(lamb_ind, 0), dict_large), np.where((dict_large[:, :-1] == np.atleast_2d(mu_ind)[:, None]).all(-1))[1]].sum()
 
+            def get_B_final_from_mus(i, mu_inds, mu_locs):
+                results = []
+                lamb_ind = dict_final[i]
+                for mu_ind, mu_loc in zip(mu_inds, mu_locs):
+                    results.append(B_large[mult_to_ind(np.append(lamb_ind, 0), dict_large), np.where((dict_large[:, :-1] == np.atleast_2d(mu_ind)[:, None]).all(-1))[1]].sum())
+                return np.vstack((np.repeat(i, len(mu_locs)), mu_locs, np.array(results)))
+
             # t.set_description('Incorporating c')
             # for i in trange(n_dim(d + k - 1, poly_order)):
             #     mu_inds, mu_locs = get_mu_final(i)
             #     for mu_ind, mu_loc in zip(mu_inds, mu_locs):
             #         B_final[i, mu_loc] = get_B_final_from_mu(i, mu_ind, mu_loc)[2]
 
-            result = Parallel(n_jobs=cpu_count())(delayed(get_B_final_from_mu)(i, mu_ind, mu_loc) for i in trange(n_dim(d + k - 1, poly_order), desc='Incorporating c') for mu_ind, mu_loc in zip(*get_mu_final(i)))
-            result = np.array(result)
+            # result = Parallel(n_jobs=32)(delayed(get_B_final_from_mu)(i, mu_ind, mu_loc) for i in trange(n_dim(d + k - 1, poly_order), desc='Incorporating c') for mu_ind, mu_loc in zip(*get_mu_final(i)))
+            result = Parallel(n_jobs=cpu_count())(delayed(get_B_final_from_mus)(i, *get_mu_final(i)) for i in trange(n_dim(d + k - 1, poly_order), desc='Incorporating c'))
+            # result = np.array(result)
+            result = np.hstack(result).T
             B_final[result[:, 0].astype('int'), result[:, 1].astype('int')] = result[:, 2]
         else:
             B_final = B_large
 
+        toc = time()
+        print(toc - tic)
+        raise Exception
         # t.set_description('Calculating limiting power expectations')
         if poly_order == 4:
             self.filter_B4 = B_final

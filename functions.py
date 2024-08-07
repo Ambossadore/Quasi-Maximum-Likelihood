@@ -48,6 +48,14 @@ def mask(mult, dicts, typ):
     elif typ == 'leq_abs':
         return dicts.sum(axis=1) <= np.sum(mult)
 
+# def mask(mult, dicts, typ):
+#     if typ == 'leq':
+#         return np.all(dicts[:, None, :] <= mult, axis=-1).squeeze()
+#     elif typ == 'eq_abs':
+#         return dicts[:, None, :].sum(axis=-1) == np.sum(mult, axis=-1)
+#     elif typ == 'leq_abs':
+#         return dicts[:, None, :].sum(axis=-1) <= np.sum(mult, axis=-1)
+
 
 def solve_int(A, b, R=None, maxnumsol=24):
     """Solves a constrained linear system of equations Ax = b, Rx >= 0, over the integers"""

@@ -6,7 +6,7 @@ import multiprocessing as mp
 import matplotlib.pyplot as plt
 from joblib import Parallel, delayed
 
-N_processes = 16
+N_processes = 32
 
 
 def batch_simulation(N_batch, seed):
@@ -20,7 +20,6 @@ def batch_simulation(N_batch, seed):
 
 def batch_simulation_simple(seed):
     np.random.seed(seed)
-    print(seed)
     return np.random.weibull(a=100, size=(1000, 1000))[:10, :10]
 
 
@@ -31,7 +30,6 @@ def batch_simulation_set(seed):
     global B
     np.random.seed(seed)
     B[seed] = np.random.weibull(a=100, size=(1000, 1000))[:10, :10]
-
 
 
 def batch_simulation_simple_joblib(seed, pbar):
@@ -79,14 +77,14 @@ def full_simulation(N_batch, N_sim):
 def full_simulation_simple(N_sim):
     # multiprocessing magic
     pool = mp.Pool(processes=N_processes)
-    future_results = [pool.apply_async(batch_simulation_simple, (seed, )) for seed in range(N_sim)]
+    future_results = [pool.apply_async(batch_simulation_simple, (seed, )) for seed in trange(N_sim)]
     results = [f.get() for f in future_results]
     return results
 
 
 def full_simulation_simple_joblib(N_sim):
     # multiprocessing magic
-    results = Parallel(n_jobs=N_processes)(delayed(batch_simulation_simple)(seed) for seed in range(N_sim))
+    results = Parallel(n_jobs=N_processes)(delayed(batch_simulation_simple)(seed) for seed in trange(N_sim))
     return results
 
 
@@ -132,7 +130,8 @@ if __name__ == '__main__':
     # results = batch_simulation_simple(seed=1000)
     # results = full_simulation_test(10)
     # results = full_simulation(1, 1000)
-    results = full_simulation_simple_joblib(1000)
+    # results = full_simulation_simple(10000)
+    results = full_simulation_simple_joblib(10000)
     # full_simulation_set_joblib(1000)
     # N = 1
     # results = full_simulation_test_simple(int(1000 * N))
