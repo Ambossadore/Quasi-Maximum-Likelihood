@@ -5,13 +5,13 @@ from functools import partial
 from itertools import product, compress
 from pathlib import Path
 from time import time
-from tqdm_joblib import tqdm_joblib
 
 from joblib import Parallel, delayed, cpu_count
 from scipy.linalg import expm, expm_frechet
 from scipy.optimize import minimize
 from scipy.special import factorial
 from tqdm import tqdm, trange
+from tqdm_joblib import tqdm_joblib
 
 from functions import *
 
@@ -394,14 +394,33 @@ class PolynomialModel:
         k = np.size(wrt)
         poly_A = self.poly_A(param, max(sum(self.signature, [])) * poly_order, deriv_order, wrt)
 
+
         dicts = return_dict(self.dim_c, max(sum(self.signature, [])) * poly_order)
         poly_B_gen = np.zeros_like(poly_A)
-        for i in range(poly_B_gen.shape[-2]):
-            for j in range(poly_B_gen.shape[-1]):
-                masks = mask(dicts[i], dicts, typ='leq') & mask(dicts[j], dicts, typ='leq')
-                lamb_ell = (ind_to_mult(i, dicts) - dicts)[masks]
-                mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
-                poly_B_gen[..., i, j] = (multi_binom(dicts[i], dicts[masks]) * poly_A[..., mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum(axis=-1)
+
+        if is_run():
+            def get_poly_B_entry(i):
+                    results = []
+                    for j in range(poly_B_gen.shape[-1]):
+                        masks = mask(dicts[i], dicts, typ='leq') & mask(dicts[j], dicts, typ='leq')
+                        lamb_ell = (ind_to_mult(i, dicts) - dicts)[masks]
+                        mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
+                        results.append((multi_binom(dicts[i], dicts[masks]) * poly_A[..., mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum(axis=-1))
+                    return np.repeat(i, poly_B_gen.shape[-1]), np.arange(poly_B_gen.shape[-1]), np.array(results)
+
+            result = Parallel(n_jobs=cpu_count())(delayed(get_poly_B_entry)(i) for i in range(poly_B_gen.shape[-2]))
+            result = list(zip(*result))
+            i_s, j_s = np.hstack(result[0]), np.hstack(result[1])
+            poly_B_gen[..., i_s, j_s] = np.hstack(tuple(map(np.transpose, result[2])))
+        else:
+            for i in range(poly_B_gen.shape[-2]):
+                for j in range(poly_B_gen.shape[-1]):
+                    masks = mask(dicts[i], dicts, typ='leq') & mask(dicts[j], dicts, typ='leq')
+                    lamb_ell = (ind_to_mult(i, dicts) - dicts)[masks]
+                    mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
+                    poly_B_gen[..., i, j] = (multi_binom(dicts[i], dicts[masks]) * poly_A[..., mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum(axis=-1)
+
+        print('Finish')
 
         triu_indices = np.less.outer(dicts.sum(axis=-1), dicts.sum(axis=-1))
         scaling_factor = mult_pow(self.scaling, (dicts[:, None, :] - dicts[None, :, :]))
@@ -442,7 +461,7 @@ class PolynomialModel:
         powers_undiff = np.vstack([np.sum(dicts_sig[np.ix_(cols, self.signature_indices[i])] * np.array(self.signature[i]), axis=1) for i in self.undiff_components])
         undiff_cols_duplicates_orig = np.array([np.where(np.all([(dicts[diff_cols_zero_orig, k] == i) for k, i in zip(self.undiff_components, powers_undiff[:, j])], axis=0))[0][0] for j in range(powers_undiff.shape[1])])
 
-        for i in range(n_dim(self.dim, poly_order)):
+        for i in trange(n_dim(self.dim, poly_order)):
             lamb = ind_to_mult(i, dicts_sig)
             lamb_tilde = np.array([np.sum(lamb[ind] * sig) for ind, sig in zip(self.signature_indices, self.signature)])
             ind = mult_to_ind(lamb_tilde, dicts)
@@ -1532,8 +1551,8 @@ class OUNIGModel(PolynomialModel):
 
 ## Define suitable initial distribution
 # init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**8, 0, 0, 0, 0])
+# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**8, 0, 0, 0, 0])
 # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
@@ -1542,8 +1561,8 @@ init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
 # model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 3.28714954, 90% CI after 200 000 observations (200k years): [0.28791, 0.31209]
 # model = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
 # model = HestonModel(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
-model = HestonModel(first_observed=2, init=init, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
-# model = HestonModel(first_observed=3, init=init, dt=1/24000, signature='1[1, 2, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[3.1, 76.9], warn=False)
+# model = HestonModel(first_observed=2, init=init, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
+model = HestonModel(first_observed=3, init=init, dt=1/24000, signature='1[1, 2, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[3.1, 76.9], warn=False)
 # model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 1.5]), wrt=2, warn=False)
 
 V, Std, Corr = model.compute_V()
