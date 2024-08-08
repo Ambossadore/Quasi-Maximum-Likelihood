@@ -1,4 +1,5 @@
 from itertools import combinations_with_replacement
+import inspect
 
 import numpy as np
 from scipy.special import binom
@@ -6,6 +7,14 @@ from scipy.stats import invgauss
 from z3 import Int, Solver, And, Or, Sum, sat
 
 it = 1
+
+
+def is_run():
+    stack_frames = inspect.stack()
+    for frame in stack_frames:
+        if 'pydev' in frame.filename:
+            return False
+    return True
 
 
 def n_dim(d, order):
@@ -275,6 +284,11 @@ def check_derivatives_BB(model, h):
             BB_deriv2_checkup[l] = (model.C_lim(perturb_pp) - model.C_lim(perturb_pm) - model.C_lim(perturb_mp) + model.C_lim(perturb_mm)) / (4 * h ** 2)
 
     return np.abs(BB - BB_checkup), np.abs(BB_deriv - BB_deriv_checkup), np.abs(BB_deriv2 - BB_deriv2_checkup)
+
+
+def is_interactive():
+    """Check if running in an interactive environment."""
+    return hasattr(sys, 'ps1') or inspect.stack()[-1].filename == '<stdin>'
 
 
 # abs0, abs1, abs2 = check_derivatives_BB(heston2, 1e-4)
