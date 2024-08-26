@@ -1,7 +1,7 @@
 import os
 import pickle as pkl
 import warnings
-from functools import partial
+from functools import partial, reduce
 from itertools import product, compress
 from pathlib import Path
 from time import time
@@ -360,6 +360,13 @@ class PolynomialModel:
             vec1, vec2 = m[1 + j_ind] + M[1 + j_ind] @ inv @ m[0], m[1 + i_ind] + M[1 + i_ind] @ inv @ m[0]
             lim_expec2[(k + 1):, 1:] = np.einsum('ijk, ik -> ij', mat1, vec1) + np.einsum('ijk, ik -> ij', mat2, vec2) + np.einsum('ij, kj -> ki', inv, m[(1 + k):] + M[(1 + k):] @ inv @ m[0])
 
+        # TODO
+        # dicts = return_dict(self.dim, 2)
+        # scaling = np.hstack([self.scaling[i] ** self.signature[i] for i in range(self.dim_c)])
+        # lim_expec2 *= (scaling ** dicts).prod(axis=-1)
+        # a *= scaling
+        # A[0] = np.diag(scaling) @ A[0] @ np.diag(scaling **(-1))
+
         Sigma_lim = np.zeros((n_components, self.dim, self.dim))
         Sigma_lim[:, np.triu_indices(self.dim)[0], np.triu_indices(self.dim)[1]] = lim_expec2[:, (1 + self.dim):]
         Sigma_lim[:, np.tril_indices(self.dim)[0], np.tril_indices(self.dim)[1]] = np.transpose(Sigma_lim, (0, 2, 1))[:, np.tril_indices(self.dim)[0], np.tril_indices(self.dim)[1]]
@@ -394,7 +401,6 @@ class PolynomialModel:
         k = np.size(wrt)
         poly_A = self.poly_A(param, max(sum(self.signature, [])) * poly_order, deriv_order, wrt)
 
-
         dicts = return_dict(self.dim_c, max(sum(self.signature, [])) * poly_order)
         poly_B_gen = np.zeros_like(poly_A)
 
@@ -420,11 +426,46 @@ class PolynomialModel:
                     mu_ell = (ind_to_mult(j, dicts) - dicts)[masks]
                     poly_B_gen[..., i, j] = (multi_binom(dicts[i], dicts[masks]) * poly_A[..., mult_to_ind(lamb_ell, dicts), mult_to_ind(mu_ell, dicts)]).sum(axis=-1)
 
-        print('Finish')
-
         triu_indices = np.less.outer(dicts.sum(axis=-1), dicts.sum(axis=-1))
         scaling_factor = mult_pow(self.scaling, (dicts[:, None, :] - dicts[None, :, :]))
         scaling_factor[triu_indices] = 1
+
+        # poly_B_gen_neu = poly_B_gen * scaling_factor
+        # poly_B = expm(poly_B_gen_neu[0] * self.dt)
+        #
+        # np.linalg.cond(np.eye(poly_B_gen.shape[1] - 1) - poly_B[1:, 1:])
+
+        # def objective(scaling, pBg):
+        #     triu_indices = np.less.outer(dicts.sum(axis=-1), dicts.sum(axis=-1))
+        #     scaling_factor = mult_pow(scaling, (dicts[:, None, :] - dicts[None, :, :]))
+        #     scaling_factor[triu_indices] = 1
+        #
+        #     poly_B = expm(pBg * scaling_factor * self.dt)
+        #     poly_B_sig = np.zeros((n_dim(self.dim, poly_order), n_dim(self.dim, poly_order)))
+        #
+        #     dicts_sig = return_dict(self.dim, poly_order)
+        #     diff_cols_zero = [(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]]
+        #     diff_cols_zero = np.all(diff_cols_zero, axis=0) if diff_cols_zero else np.repeat(True, dicts_sig.shape[0])
+        #     undiff_cols_duplicates = [(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]]
+        #     undiff_cols_duplicates = np.all(undiff_cols_duplicates, axis=0) if undiff_cols_duplicates else np.repeat(True, dicts_sig.shape[0])
+        #     cols = np.where(diff_cols_zero & undiff_cols_duplicates)[0]
+        #
+        #     diff_cols_zero_orig = [(dicts[:, i] == 0) for i in self.differenced_components]
+        #     diff_cols_zero_orig.append(np.repeat(True, dicts.shape[0]))
+        #     diff_cols_zero_orig = np.all(diff_cols_zero_orig, axis=0)
+        #     powers_undiff = np.vstack([np.sum(dicts_sig[np.ix_(cols, self.signature_indices[i])] * np.array(self.signature[i]), axis=1) for i in self.undiff_components])
+        #     undiff_cols_duplicates_orig = np.array([np.where(np.all([(dicts[diff_cols_zero_orig, k] == i) for k, i in zip(self.undiff_components, powers_undiff[:, j])], axis=0))[0][0] for j in range(powers_undiff.shape[1])])
+        #
+        #     for i in range(n_dim(self.dim, poly_order)):
+        #         lamb = ind_to_mult(i, dicts_sig)
+        #         lamb_tilde = np.array([np.sum(lamb[ind] * sig) for ind, sig in zip(self.signature_indices, self.signature)])
+        #         ind = mult_to_ind(lamb_tilde, dicts)
+        #         poly_B_sig[..., i, cols] = poly_B[..., ind, diff_cols_zero_orig][..., undiff_cols_duplicates_orig]
+        #
+        #     return np.linalg.cond(np.eye(poly_B_sig.shape[-1] - 1) - poly_B_sig[1:, 1:])
+
+        # minimize(objective, np.array([100, 100]), args=(poly_B_gen[0],), bounds=[(10, 100) for i in range(self.dim_c)], method='Nelder-Mead')
+
         poly_B_gen *= scaling_factor
 
         if deriv_order == 0:
@@ -448,12 +489,15 @@ class PolynomialModel:
             second_frechet = expm(X2)[:, :poly_B.shape[-2], -poly_B.shape[-1]:]
             poly_B[(k + 1):] = first_frechet + second_frechet
 
+        # poly_B = poly_B / scaling_factor  # TODO
+
         dicts_sig = return_dict(self.dim, poly_order)
-        diff_cols_zero = [(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]]
-        diff_cols_zero = np.all(diff_cols_zero, axis=0) if diff_cols_zero else np.repeat(True, dicts_sig.shape[0])
-        undiff_cols_duplicates = [(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]]
-        undiff_cols_duplicates = np.all(undiff_cols_duplicates, axis=0) if undiff_cols_duplicates else np.repeat(True, dicts_sig.shape[0])
-        cols = np.where(diff_cols_zero & undiff_cols_duplicates)[0]
+        # diff_cols_zero = [(dicts_sig[:, i] == 0) for j in self.differenced_components for i in self.signature_indices[j]]
+        # diff_cols_zero = np.all(diff_cols_zero, axis=0) if diff_cols_zero else np.repeat(True, dicts_sig.shape[0])
+        # undiff_cols_duplicates = [(dicts_sig[:, i] <= 1) for j in self.undiff_components for i in self.signature_indices[j][:-1]]
+        # undiff_cols_duplicates = np.all(undiff_cols_duplicates, axis=0) if undiff_cols_duplicates else np.repeat(True, dicts_sig.shape[0])
+        # cols = np.where(diff_cols_zero & undiff_cols_duplicates)[0]
+        cols = reduce(np.union1d, [np.unique(np.sum(self.signature[j] * dicts_sig[:, self.signature_indices[j]], axis=-1), return_index=True)[1] for j in self.undiff_components])
 
         diff_cols_zero_orig = [(dicts[:, i] == 0) for i in self.differenced_components]
         diff_cols_zero_orig.append(np.repeat(True, dicts.shape[0]))
@@ -461,7 +505,7 @@ class PolynomialModel:
         powers_undiff = np.vstack([np.sum(dicts_sig[np.ix_(cols, self.signature_indices[i])] * np.array(self.signature[i]), axis=1) for i in self.undiff_components])
         undiff_cols_duplicates_orig = np.array([np.where(np.all([(dicts[diff_cols_zero_orig, k] == i) for k, i in zip(self.undiff_components, powers_undiff[:, j])], axis=0))[0][0] for j in range(powers_undiff.shape[1])])
 
-        for i in trange(n_dim(self.dim, poly_order)):
+        for i in range(n_dim(self.dim, poly_order)):
             lamb = ind_to_mult(i, dicts_sig)
             lamb_tilde = np.array([np.sum(lamb[ind] * sig) for ind, sig in zip(self.signature_indices, self.signature)])
             ind = mult_to_ind(lamb_tilde, dicts)
@@ -1452,9 +1496,9 @@ class HestonModel(PolynomialModel):
             self.seed = seed
 
         if self.seed is not None:
-            np.savetxt('./saves/HestonModel/Observations/observations_{}_seed{}_{}obs.txt'.format(self.savestring, self.seed, observations.shape[0] - 1), observations / np.hstack([scaling[i] ** sig for i, sig in enumerate(signature)]))
+            np.savetxt('./saves/HestonModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_seed{}_{}obs.txt'.format(self.dt, self.signature_string, self.seed, observations.shape[0] - 1), observations / np.hstack([scaling[i] ** sig for i, sig in enumerate(signature)]))
         else:
-            np.savetxt('./saves/HestonModel/Observations/observations_{}_{}obs.txt'.format(self.savestring, observations.shape[0] - 1), observations / np.hstack([scaling[i] ** sig for i, sig in enumerate(signature)]))
+            np.savetxt('./saves/HestonModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_{}obs.txt'.format(self.dt, self.signature_string, observations.shape[0] - 1), observations / np.hstack([scaling[i] ** sig for i, sig in enumerate(signature)]))
         self.observations = observations
 
 
@@ -1550,19 +1594,21 @@ class OUNIGModel(PolynomialModel):
 
 
 ## Define suitable initial distribution
-# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-# init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**8, 0, 0, 0, 0])
+init2 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+init4 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+init8 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**6, 0.3**8, 0, 0, 0, 0])
 # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 
 ## Test the calculation of asymptotic covariances #1 (No observations needed)
 # model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 3.28714954, 90% CI after 200 000 observations (200k years): [0.28791, 0.31209]
-# model = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
-# model = HestonModel(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
+# model2 = HestonModel(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
+# model4 = HestonModel(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
 # model = HestonModel(first_observed=2, init=init, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
-model = HestonModel(first_observed=3, init=init, dt=1/24000, signature='1[1, 2, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[3.1, 76.9], warn=False)
+# model8 = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[1, 1], warn=False)
+# model8 = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[100., 100.], warn=False)
+model8 = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[2.7, 61.4], warn=False)
 # model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 1.5]), wrt=2, warn=False)
 
 V, Std, Corr = model.compute_V()
@@ -1572,8 +1618,9 @@ exit()
 
 ## Test the estimation #2 (Simulation study with observations)
 model = HestonModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
-model = HestonModel.from_observations(first_observed=1, init=init, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
-model = HestonModel.from_observations(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
+model = HestonModel.from_observations(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
+model = HestonModel.from_observations(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
+model = HestonModel.from_observations(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20)
 model = OUNIGModel.from_observations(first_observed=1, init=init, dt=1/24000, obs=200000, inter_steps=250, true_param=np.array([1, 0.5, 1.5]), seed=0)
 
 result = model.fit_qml(fit_parameter=2, initial=0.3, t=200000)
@@ -1582,7 +1629,7 @@ V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
 
 fits = []
 for i in range(5):
-    model = HestonModel.from_observations(first_observed=2, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), scaling=[20, 140], seed=20 + i)
+    model = HestonModel.from_observations(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20 + i)
     fits.append(model.fit_qml(fit_parameter=2, initial=0.3, t=200000))
 
 
