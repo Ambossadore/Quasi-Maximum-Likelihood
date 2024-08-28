@@ -1,10 +1,10 @@
 import os
 import pickle as pkl
 import warnings
-from functools import partial, reduce
+from functools import partial
 from itertools import product, compress
 from pathlib import Path
-from time import time
+from time import time, sleep
 
 from joblib import Parallel, delayed, cpu_count
 from scipy.linalg import expm, expm_frechet
@@ -446,7 +446,8 @@ class PolynomialModel:
             poly_B[(k + 1):] = first_frechet + second_frechet
 
         dicts_sig = return_dict(self.dim, poly_order)
-        cols = reduce(np.union1d, [np.unique(np.sum(self.signature[j] * dicts_sig[:, self.signature_indices[j]], axis=-1), return_index=True)[1] for j in self.undiff_components])
+        cols = np.sort(np.unique(np.vstack([np.sum(self.signature[j] * dicts_sig[:, self.signature_indices[j]], axis=-1) for j in self.undiff_components]), axis=-1, return_index=True)[1])
+        # cols = reduce(np.union1d, [np.unique(np.sum(self.signature[j] * dicts_sig[:, self.signature_indices[j]], axis=-1), return_index=True)[1] for j in self.undiff_components])
 
         diff_cols_zero_orig = [(dicts[:, i] == 0) for i in self.differenced_components]
         diff_cols_zero_orig.append(np.repeat(True, dicts.shape[0]))
@@ -800,8 +801,8 @@ class PolynomialModel:
         pass
 
     @classmethod
-    def from_observations(cls, first_observed, init, dt, signature, obs, inter_steps=None, true_param=None, wrt=None, scaling=1, seed=None):
-        obj = cls(first_observed=first_observed, init=init, dt=dt, signature=signature, true_param=true_param, wrt=wrt, scaling=scaling)
+    def from_observations(cls, first_observed, init, dt, signature, obs, inter_steps=None, true_param=None, wrt=None, scaling=1, seed=None, warn=True):
+        obj = cls(first_observed=first_observed, init=init, dt=dt, signature=signature, true_param=true_param, wrt=wrt, scaling=scaling, warn=warn)
 
         if isinstance(obs, str):
             filename = './saves/' + cls.__name__ + '/Observations/' + obs
@@ -1050,6 +1051,7 @@ class PolynomialModel:
             i, j = np.maximum(i, j), np.minimum(i, j)
             l = (i + j * (self.dim - (j + 1) / 2)).astype('int')
 
+            poly_B = self.poly_B(param, poly_order=2, deriv_order=0, return_stack=True)
             Q2 = np.zeros((self.dim ** 2, self.dim ** 2))
             Q2[:, np.unique(l, return_index=True)[1]] = poly_B[0, (self.dim + 1):, (self.dim + 1):][l]
             Q2 -= np.kron(A[0], A[0])
@@ -1444,9 +1446,9 @@ class HestonModel(PolynomialModel):
             self.seed = seed
 
         if self.seed is not None:
-            np.savetxt('./saves/HestonModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_seed{}_{}obs.txt'.format(self.dt, self.signature_string, self.seed, observations.shape[0] - 1), observations / np.hstack([scaling[i] ** sig for i, sig in enumerate(signature)]))
+            np.savetxt('./saves/HestonModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_seed{}_{}obs.txt'.format(self.dt, self.signature_string, self.seed, observations.shape[0] - 1), observations / np.hstack([self.scaling[i] ** sig for i, sig in enumerate(self.signature)]))
         else:
-            np.savetxt('./saves/HestonModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_{}obs.txt'.format(self.dt, self.signature_string, observations.shape[0] - 1), observations / np.hstack([scaling[i] ** sig for i, sig in enumerate(signature)]))
+            np.savetxt('./saves/HestonModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_{}obs.txt'.format(self.dt, self.signature_string, observations.shape[0] - 1), observations / np.hstack([self.scaling[i] ** sig for i, sig in enumerate(self.signature)]))
         self.observations = observations
 
 
@@ -1504,7 +1506,7 @@ class OUNIGModel(PolynomialModel):
             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
 
         if self.observations is not None:
-            warnings.warn('There are already observations. New observations will be appended to the end.')
+            # warnings.warn('There are already observations. New observations will be appended to the end.')
             x = self.observations[-1]
         else:
             obs0 = self.init.sample(param=self.true_param, n=1)
@@ -1539,19 +1541,19 @@ class OUNIGModel(PolynomialModel):
             self.seed = seed
 
         if self.seed is not None:
-            np.savetxt('./saves/OUNIGModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_seed{}_{}obs.txt'.format(self.dt, self.signature_string, self.seed, observations.shape[0] - 1), observations / np.hstack([scaling[i] ** sig for i, sig in enumerate(signature)]))
+            np.savetxt('./saves/OUNIGModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_seed{}_{}obs.txt'.format(self.dt, self.signature_string, self.seed, observations.shape[0] - 1), observations / np.hstack([self.scaling[i] ** sig for i, sig in enumerate(self.signature)]))
         else:
-            np.savetxt('./saves/OUNIGModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_{}obs.txt'.format(self.dt, self.signature_string, observations.shape[0] - 1), observations / np.hstack([scaling[i] ** sig for i, sig in enumerate(signature)]))
+            np.savetxt('./saves/OUNIGModel/Observations/observations_par=[' + ', '.join('{:.3f}'.format(item) for item in self.true_param) + ']_dt={:.1e}_sig{}_{}obs.txt'.format(self.dt, self.signature_string, observations.shape[0] - 1), observations / np.hstack([self.scaling[i] ** sig for i, sig in enumerate(self.signature)]))
 
         self.observations = observations
 
 
 
 ## Define suitable initial distribution
-init2 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-init4 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-init8 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**6, 0.3**8, 0, 0, 0, 0])
-# init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
+# init2 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+# init4 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+# init8 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**6, 0.3**8, 0, 0, 0, 0])
+init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 
@@ -1560,21 +1562,62 @@ init8 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**6, 0.3**8,
 # model2 = HestonModel(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
 # model4 = HestonModel(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
 # model4_1min = HestonModel(first_observed=2, init=init4, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
-model8 = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[2.7, 61.4], warn=False)
-# model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 1.5]), wrt=2, warn=False)
+# model8 = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[2.7, 61.4], warn=False)
+# model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 3]), wrt=2, warn=False)
 
-V, Std, Corr = model.compute_V()
-print(Std)
-exit()
+# V, Std, Corr = model.compute_V()
+# print(Std)
+# exit()
 
 
 ## Test the estimation #2 (Simulation study with observations)
-model = HestonModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
-model = HestonModel.from_observations(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
-model = HestonModel.from_observations(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
-model = HestonModel.from_observations(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20)
+# model = HestonModel.from_observations(first_observed=1, init=init2, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20, warn=False)
+# model = HestonModel.from_observations(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
+# model = HestonModel.from_observations(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
+# model = HestonModel.from_observations(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20)
 
-result = model.fit_qml(fit_parameter=2, initial=0.3, t=200000)
+def batch_simulation(seed):
+    num = 10
+    obs = 20000
+    model = OUNIGModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', obs=obs, inter_steps=5000, true_param=np.array([1, 0.5, 3]), seed=seed, warn=False)
+    for i in range(1, num):
+        model.seed = seed + i
+        model.generate_observations(t_max=obs, inter_steps=5000, seed=seed + i, verbose=1)
+
+tic = time()
+for j in range(4, 25):
+    results = Parallel(n_jobs=cpu_count())(delayed(batch_simulation)(seed) for seed in np.arange(200 * j + 1, 200 * j + 201, 10))
+    print('Finished {}'.format(j))
+    sleep(3)
+
+    for seed in np.arange(200 * j + 1, 200 * j + 201, 10):
+        os.rename('./saves/OUNIGModel/Observations/observations_par=[1.000, 0.500, 3.000]_dt=1.0e+00_sig1[1]_2[1]_seed{}+{}_200000obs.txt'.format(seed + 9, seed + 9), './saves/OUNIGModel/Observations/observations_par=[1.000, 0.500, 3.000]_dt=1.0e+00_sig1[1]_2[1]_seed{}-{}_200000obs.txt'.format(seed, seed + 9))
+
+    sleep(3)
+    dir_list = os.listdir('saves/OUNIGModel/Observations')
+    dir_list = [ls for ls in dir_list if '-' not in ls]
+    for dir in dir_list:
+        os.remove('saves/OUNIGModel/Observations/' + dir)
+toc = time()
+print(toc - tic)
+exit()
+
+# model = OUNIGModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', obs=200000, inter_steps=5000, true_param=np.array([1, 0.5, 3]), seed='11-20', warn=False)
+# model.generate_observations(t_max=1000, inter_steps=5000, seed=11, verbose=1)
+
+
+# def fit(seed_start):
+#     seed = '{}-{}'.format(seed_start, seed_start + 9)
+#     model = OUNIGModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', obs=200000, inter_steps=5000, true_param=np.array([1, 0.5, 3]), seed=seed, warn=False)
+#     result = model.fit_qml(fit_parameter=2, initial=3, t=200000)
+#     return result
+#
+# results = Parallel(n_jobs=cpu_count())(delayed(fit)(seed_start) for seed_start in np.arange(1, 601, 10))
+#
+# print(np.mean(results), np.std(results))
+# exit()
+
+result = model.fit_qml(fit_parameter=2, initial=3, t=200000)
 result = model.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
 V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
 
