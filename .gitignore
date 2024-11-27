@@ -1,7 +1,0 @@
-saves/HestonModel/Polynomial Matrices/B4[0, 1, 2, 3]_m=1_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_sc[1.0, 1.0].txt
-saves/HestonModel/Polynomial Matrices/B4[1, 2, 3]_m=1_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_sc[1.0, 1.0].txt
-saves/HestonModel/Polynomial Matrices/B4[2]_m=1_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1, 2]_2d[1, 2, 4]_sc[1.0, 1.0].txt
-saves/HestonModel/Polynomial Matrices/B4[2]_m=1_par=[1.000, 0.160, 0.300, -0.500]_dt=4.2e-05_sig1[1, 2]_2d[1, 2, 4]_sc[20.0, 140.0].txt
-saves/HestonModel/Polynomial Matrices/B4[2]_m=2_par=[1.000, 0.160, 0.300, -0.500]_dt=4.2e-05_sig1[1, 2]_2d[1, 2, 4]_sc[20.0, 140.0].txt
-saves/HestonModel/Polynomial Matrices/B4[2]_m=2_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1, 2]_2d[1, 2, 4]_sc[1.0, 1.0].txt
-saves/HestonModel/Polynomial Matrices/B4[2]_m=2_par=[1.000, 0.160, 0.300, -0.500]_dt=8.3e-06_sig1[1, 2]_2d[1, 2, 4]_sc[7.2, 210.8].txt

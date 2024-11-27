@@ -1553,47 +1553,48 @@ class OUNIGModel(PolynomialModel):
         self.observations = observations
 
 
+if __name__ == '__main__':
 
-### Define suitable initial distribution
-# init2 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-init4 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-# init8 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**6, 0.3**8, 0, 0, 0, 0])
-# init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
-# init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
-
-
-### Test the calculation of asymptotic covariances #1 (No observations needed)
-# model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 3.28714954, 90% CI after 200 000 observations (200k years): [0.28791, 0.31209]
-# model = HestonModel(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
-model = HestonModel(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
-# model = HestonModel(first_observed=2, init=init4, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
-# model = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[2.7, 61.4], warn=False)
-# model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 3]), wrt=2, warn=False)
-
-V, Std, Corr = model.compute_V()
+    ### Define suitable initial distribution
+    # init2 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+    init4 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+    # init8 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**6, 0.3**8, 0, 0, 0, 0])
+    # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
+    # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 
-### Test the estimation #2 (Simulation study with observations)
-# model = HestonModel.from_observations(first_observed=1, init=init2, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20, warn=False)
-# model = HestonModel.from_observations(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
-# model = HestonModel.from_observations(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
-# model = HestonModel.from_observations(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20)
+    ### Test the calculation of asymptotic covariances #1 (No observations needed)
+    # model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 3.28714954, 90% CI after 200 000 observations (200k years): [0.28791, 0.31209]
+    # model = HestonModel(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
+    model = HestonModel(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
+    # model = HestonModel(first_observed=2, init=init4, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
+    # model = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[2.7, 61.4], warn=False)
+    # model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 3]), wrt=2, warn=False)
 
-# result = model.fit_qml(fit_parameter=2, initial=3, t=200000)
-# result = model.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
-# V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
-
-
-### Test the estimation #3 (Semi-Real-world scenario; observations externally given, just one parameter unknown)
-# model = HestonModel.from_observations(first_observed=1, init=init2, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, np.nan, -0.5]))
-#
-# result = model.fit_qml(fit_parameter=2, initial=0.3, t=200000, update_estimate=True)
-# V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
-# model.setup_filter(wrt=2)
-# V, Std, Corr = model.compute_V()
+    V, Std, Corr = model.compute_V()
 
 
-### Test the new restructuring #3 (Real-world scenario; observations externally given, all parameters unknown)
-# model = HestonModel.from_observations(first_observed=1, init=init2, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]')
-# seq = model.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=10000)
-# res = model.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
+    ### Test the estimation #2 (Simulation study with observations)
+    # model = HestonModel.from_observations(first_observed=1, init=init2, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20, warn=False)
+    # model = HestonModel.from_observations(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
+    # model = HestonModel.from_observations(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
+    # model = HestonModel.from_observations(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20)
+
+    # result = model.fit_qml(fit_parameter=2, initial=3, t=200000)
+    # result = model.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
+    # V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
+
+
+    ### Test the estimation #3 (Semi-Real-world scenario; observations externally given, just one parameter unknown)
+    # model = HestonModel.from_observations(first_observed=1, init=init2, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, np.nan, -0.5]))
+    #
+    # result = model.fit_qml(fit_parameter=2, initial=0.3, t=200000, update_estimate=True)
+    # V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
+    # model.setup_filter(wrt=2)
+    # V, Std, Corr = model.compute_V()
+
+
+    ### Test the new restructuring #3 (Real-world scenario; observations externally given, all parameters unknown)
+    # model = HestonModel.from_observations(first_observed=1, init=init2, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]')
+    # seq = model.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=10000)
+    # res = model.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
