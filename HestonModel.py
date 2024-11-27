@@ -4,7 +4,7 @@ import warnings
 from functools import partial
 from itertools import product, compress
 from pathlib import Path
-from time import time, sleep
+from time import time
 
 from joblib import Parallel, delayed, cpu_count
 from scipy.linalg import expm, expm_frechet
@@ -175,8 +175,8 @@ class KalmanFilter:
         Sig_inv = np.linalg.inv(self.Sig_tp1_t_lim[self.first_observed:, self.first_observed:])
         s_tilde = np.einsum('jk, ikl, lm -> ijm', Sig_inv, s_star[:, self.first_observed:, self.first_observed:], Sig_inv)
         k_tilde = self.Sig_tp1_t_lim[:, self.first_observed:] @ Sig_inv
-        V_tp1_t_list = [self.E_0(order=1, wrt=wrt)]
-        V_tt_list = [self.E_0(order=1, wrt=wrt) + (s_star[:, :, self.first_observed:] @ Sig_inv - np.einsum('jk, ikl -> ijl', self.Sig_tp1_t_lim[:, self.first_observed:], s_tilde)) @ (observations[0] - self.X_hat_tp1_t_list_hom[0, self.first_observed:]) - np.einsum('jk, ik -> ij', k_tilde, self.E_0(order=1, wrt=wrt)[:, self.first_observed:])]
+        V_tp1_t_list = [self.E_0(deriv_order=1, wrt=wrt)]
+        V_tt_list = [self.E_0(deriv_order=1, wrt=wrt) + (s_star[:, :, self.first_observed:] @ Sig_inv - np.einsum('jk, ikl -> ijl', self.Sig_tp1_t_lim[:, self.first_observed:], s_tilde)) @ (observations[0] - self.X_hat_tp1_t_list_hom[0, self.first_observed:]) - np.einsum('jk, ik -> ij', k_tilde, self.E_0(deriv_order=1, wrt=wrt)[:, self.first_observed:])]
         V_tp1_t_list.append(partial_a + partial_A @ self.X_hat_tt_list_hom[0] + np.einsum('jk, ik -> ij', self.A[0], V_tt_list[0]))
         V_tp1_t = V_tp1_t_list[-1]
         if isinstance(verbose, tqdm):
@@ -232,7 +232,7 @@ class KalmanFilter:
         N_i = np.einsum('jk, ikl -> ijl', self.Sig_tp1_t_lim[:, self.first_observed:], s_star_i_tilde) - s_star_i[:, :, self.first_observed:] @ Sig_inv
         N_j = np.einsum('jk, ikl -> ijl', self.Sig_tp1_t_lim[:, self.first_observed:], s_star_j_tilde) - s_star_j[:, :, self.first_observed:] @ Sig_inv
 
-        W_tp1_t_list = [self.E_0(order=2, wrt=wrt)]
+        W_tp1_t_list = [self.E_0(deriv_order=2, wrt=wrt)]
         W_tt_list = [W_tp1_t_list[0] + M @ (observations[0] - self.X_hat_tp1_t_list_hom[0, self.first_observed:]) + np.einsum('ijk, ik -> ij', N_j, V_tp1_t_i[0, :, self.first_observed:]) + np.einsum('ijk, ik -> ij', N_i, V_tp1_t_j[0, :, self.first_observed:]) - np.einsum('jk, ik -> ij', k_tilde, W_tp1_t_list[0][:, self.first_observed:])]
         W_tp1_t_list.append(partial_a + partial_A @ self.X_hat_tt_list_hom[0] + np.einsum('ijk, ik -> ij', partial_A_j, V_tt_i[0]) + np.einsum('ijk, ik -> ij', partial_A_i, V_tt_j[0]) + np.einsum('jk, ik -> ij', self.A[0], W_tt_list[0]))
         W_tp1_t = W_tp1_t_list[-1]
@@ -902,15 +902,20 @@ class PolynomialModel:
 
         else:
             t_range = np.arange(t_max + every)[::every][1:]
-            qml_list = []
-            if verbose == 0:
-                t_range = tqdm(t_range)
-            for t in t_range:
+            if is_run():
                 if verbose == 1:
-                    current = time()
-                    print('Fitting QML with t = {} observations. Total Elapsed Time: {}'.format(t, format_time(current - start)))
-                qml_list.append(self.fit_qml(fit_parameter=fit_parameter, initial=initial, t=t, verbose=verbose))
-                initial = qml_list[-1]
+                    t_range = tqdm(t_range)
+                qml_list = Parallel(n_jobs=cpu_count())(delayed(self.fit_qml)(fit_parameter=fit_parameter, initial=initial, t=t, verbose=0) for t in t_range)
+            else:
+                qml_list = []
+                if verbose == 0:
+                    t_range = tqdm(t_range)
+                for t in t_range:
+                    if verbose == 1:
+                        current = time()
+                        print('Fitting QML with t = {} observations. Total Elapsed Time: {}'.format(t, format_time(current - start)))
+                    qml_list.append(self.fit_qml(fit_parameter=fit_parameter, initial=initial, t=t, verbose=verbose))
+                    initial = qml_list[-1]
             qml_list = np.array(qml_list)
 
             if update_estimate:
@@ -1082,8 +1087,8 @@ class PolynomialModel:
             h = lambda x: alpha_h @ x + beta_h.reshape(-1, 1)
             raw = np.einsum('ki, li -> ikl', g(vechatX.T), g(vechatX.T)) - np.einsum('ki, li -> ikl', h(vechatX.T), h(vechatX.T))
             if save_raw:
-                file = open(filepath, 'wb')
-                pkl.dump(raw, file)
+                with open(filepath, 'wb') as file:
+                    pkl.dump(raw, file)
 
             return cummean(raw, axis=0)
         else:
@@ -1211,8 +1216,8 @@ class PolynomialModel:
             result[:, np.triu_indices(np.size(wrt))[1], np.triu_indices(np.size(wrt))[0]] = out
 
             if save_raw:
-                file = open(filepath, 'wb')
-                pkl.dump(result, file)
+                with open(filepath, 'wb') as file:
+                    pkl.dump(result, file)
 
             return cummean(result, axis=0)
         else:
@@ -1340,8 +1345,8 @@ class PolynomialModel:
                 Corr = np.einsum('ijk, ikl, ilm -> ijm', Std_inv, V, Std_inv)
                 Corr[:, np.diag_indices(np.size(wrt))[0], np.diag_indices(np.size(wrt))[1]] = 1
 
-            file = open(filepath, 'wb')
-            pkl.dump([V.squeeze(), Std.squeeze(), Corr.squeeze()], file)
+            with open(filepath, 'wb') as file:
+                pkl.dump([V.squeeze(), Std.squeeze(), Corr.squeeze()], file)
 
             return V.squeeze(), Std.squeeze(), Corr.squeeze()
         else:
@@ -1506,7 +1511,7 @@ class OUNIGModel(PolynomialModel):
             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
 
         if self.observations is not None:
-            # warnings.warn('There are already observations. New observations will be appended to the end.')
+            warnings.warn('There are already observations. New observations will be appended to the end.')
             x = self.observations[-1]
         else:
             obs0 = self.init.sample(param=self.true_param, n=1)
@@ -1549,103 +1554,46 @@ class OUNIGModel(PolynomialModel):
 
 
 
-## Define suitable initial distribution
+### Define suitable initial distribution
 # init2 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-# init4 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+init4 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
 # init8 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**6, 0.3**8, 0, 0, 0, 0])
-init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
+# init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
 # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
 
 
-## Test the calculation of asymptotic covariances #1 (No observations needed)
+### Test the calculation of asymptotic covariances #1 (No observations needed)
 # model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 3.28714954, 90% CI after 200 000 observations (200k years): [0.28791, 0.31209]
-# model2 = HestonModel(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
-# model4 = HestonModel(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
-# model4_1min = HestonModel(first_observed=2, init=init4, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
-# model8 = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[2.7, 61.4], warn=False)
+# model = HestonModel(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
+model = HestonModel(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
+# model = HestonModel(first_observed=2, init=init4, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
+# model = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[2.7, 61.4], warn=False)
 # model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 3]), wrt=2, warn=False)
 
-# V, Std, Corr = model.compute_V()
-# print(Std)
-# exit()
+V, Std, Corr = model.compute_V()
 
 
-## Test the estimation #2 (Simulation study with observations)
+### Test the estimation #2 (Simulation study with observations)
 # model = HestonModel.from_observations(first_observed=1, init=init2, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20, warn=False)
 # model = HestonModel.from_observations(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
 # model = HestonModel.from_observations(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
 # model = HestonModel.from_observations(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20)
 
-def batch_simulation(seed):
-    num = 10
-    obs = 20000
-    model = OUNIGModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', obs=obs, inter_steps=5000, true_param=np.array([1, 0.5, 3]), seed=seed, warn=False)
-    for i in range(1, num):
-        model.seed = seed + i
-        model.generate_observations(t_max=obs, inter_steps=5000, seed=seed + i, verbose=1)
-
-tic = time()
-for j in range(4, 25):
-    results = Parallel(n_jobs=cpu_count())(delayed(batch_simulation)(seed) for seed in np.arange(200 * j + 1, 200 * j + 201, 10))
-    print('Finished {}'.format(j))
-    sleep(3)
-
-    for seed in np.arange(200 * j + 1, 200 * j + 201, 10):
-        os.rename('./saves/OUNIGModel/Observations/observations_par=[1.000, 0.500, 3.000]_dt=1.0e+00_sig1[1]_2[1]_seed{}+{}_200000obs.txt'.format(seed + 9, seed + 9), './saves/OUNIGModel/Observations/observations_par=[1.000, 0.500, 3.000]_dt=1.0e+00_sig1[1]_2[1]_seed{}-{}_200000obs.txt'.format(seed, seed + 9))
-
-    sleep(3)
-    dir_list = os.listdir('saves/OUNIGModel/Observations')
-    dir_list = [ls for ls in dir_list if '-' not in ls]
-    for dir in dir_list:
-        os.remove('saves/OUNIGModel/Observations/' + dir)
-toc = time()
-print(toc - tic)
-exit()
-
-# model = OUNIGModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', obs=200000, inter_steps=5000, true_param=np.array([1, 0.5, 3]), seed='11-20', warn=False)
-# model.generate_observations(t_max=1000, inter_steps=5000, seed=11, verbose=1)
+# result = model.fit_qml(fit_parameter=2, initial=3, t=200000)
+# result = model.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
+# V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
 
 
-# def fit(seed_start):
-#     seed = '{}-{}'.format(seed_start, seed_start + 9)
-#     model = OUNIGModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', obs=200000, inter_steps=5000, true_param=np.array([1, 0.5, 3]), seed=seed, warn=False)
-#     result = model.fit_qml(fit_parameter=2, initial=3, t=200000)
-#     return result
+### Test the estimation #3 (Semi-Real-world scenario; observations externally given, just one parameter unknown)
+# model = HestonModel.from_observations(first_observed=1, init=init2, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, np.nan, -0.5]))
 #
-# results = Parallel(n_jobs=cpu_count())(delayed(fit)(seed_start) for seed_start in np.arange(1, 601, 10))
-#
-# print(np.mean(results), np.std(results))
-# exit()
-
-result = model.fit_qml(fit_parameter=2, initial=3, t=200000)
-result = model.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
-V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
-
-fits = []
-for i in range(5):
-    model = HestonModel.from_observations(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4**2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20 + i)
-    fits.append(model.fit_qml(fit_parameter=2, initial=0.3, t=200000))
+# result = model.fit_qml(fit_parameter=2, initial=0.3, t=200000, update_estimate=True)
+# V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
+# model.setup_filter(wrt=2)
+# V, Std, Corr = model.compute_V()
 
 
-## Test the estimation #3 (Semi-Real-world scenario; observations externally given, just one parameter unknown)
-model = HestonModel.from_observations(first_observed=1, init=init, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_seed5_200000obs.txt', dt=1/250, true_param=np.array([1, 0.4**2, np.nan, -0.5]))
-
-result = model.fit_qml(fit_parameter=2, initial=0.3, t=10000)
-result = model.fit_qml(fit_parameter=2, initial=0.3, t=12000, update_estimate=True)
-V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
-
-model.setup_filter(wrt=2)
-V, Std, Corr = model.compute_V()
-
-
-## Test the new restructuring #3 (Real-world scenario; observations externally given, all parameters unknown)
-model = HestonModel.from_observations(first_observed=1, init=init, obs='observations_1.000_0.160_0.300_-0.500_seed5_200000obs.txt')
-seq = model.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=10000)
-res = model.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
-
-
-## Calculation times for polynomial matrices
-## Heston_sig1[1]_2d[1, 2], wrt = 2 --> 82.97s
-## Heston_sig1[1]_2d[1, 2], wrt = [2, 3] --> 909.72s
-## Heston_sig1[1]_2d[1, 2], wrt = [1, 2, 3] --> 7555.98s
-## Heston_sig1[1]_2d[1, 2], wrt = [0, 1, 2, 3] --> 58115.90s
+### Test the new restructuring #3 (Real-world scenario; observations externally given, all parameters unknown)
+# model = HestonModel.from_observations(first_observed=1, init=init2, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]')
+# seq = model.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=10000)
+# res = model.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
