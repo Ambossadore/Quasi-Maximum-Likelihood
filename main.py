@@ -17,7 +17,31 @@ from functions import *
 
 
 class KalmanFilter:
+    """
+    This class builds the Kalman filter covariance matrices and contains methods to compute the Kalman
+    filter and its derivatives with respect to k parameters for some given polynomial state space model
+    under some fixed true parameter.
+    """
     def __init__(self, dim, a, A, C, E_0, Cov_0, first_observed=0):
+        """
+        :param dim: Dimension of the underlying polynomial state space model
+        :param a: State transition vector of the underlying polynomial state space model. Array of shape (1 + k + k*(k+1)/2, dim).
+            a[0] is the state transition vector, the following k rows are the first derivatives of a[0] with respect to the parameters
+            1,...,k and the following k*(k+1)/2 rows are the distinct second derivatives of a[0] with respect to the parameters 11,12,...,kk.
+        :param A: State transition matrix of the underlying polynomial state space model. Array of shape (1 + k + k*(k+1)/2, dim, dim).
+            A[0] is the state transition matrix, the following k rows are the first derivatives of A[0] with respect to the parameters
+            1,...,k and the following k*(k+1)/2 rows are the distinct second derivatives of A[0] with respect to the parameters 11,12,...,kk.
+        :param C: Limiting Covariance matrix of the noise sequence of the polynomial state space model. Array of shape (k + 1, dim, dim).
+            C[0] is the covariance matrix, the following k rows are the first derivatives of C[0] with respect to the parameters
+            1,...,k and the following k*(k+1)/2 rows are the distinct second derivatives of C[0] with respect to the parameters 11,12,...,kk.
+        :param E_0: Function that returns E(X(0)). Shoud accept arguments deriv_order=1,2 and wrt, the latter being an integer or list
+            of integers between 1 and k-1, to return the first or second derivatives of E(X(0)) with respect to the parameters given
+            by the argument wrt.
+        :param Cov_0: Function that returns Cov(X(0)). Should accept arguments deriv_order=1,2 and wrt, the latter being an integer
+            or list of integers between 1 and k-1, to return the first or second derivatives of Cov(X(0)) with respect to the parameters
+            given by the argument wrt.
+        :param first_observed: Integer between 0,..., dim-1 that denotes the first observed component of the state space model
+        """
         self.dim = dim
         self.a = a
         self.A = A
@@ -38,6 +62,10 @@ class KalmanFilter:
         self.X_hat_tt_list_hom = None
 
     def build_covariance(self, t_max=100000):
+        """
+        Computes the sequence of Kalman filter covariance matrices Sigma(t+1, t) and Sigma(t, t).
+        :param t_max: Maximal number of t in the sequence
+        """
         Cov_0 = self.Cov_0()
         Sig_tp1_t_list = [Cov_0]
         Sig_tt_list = [Cov_0 - Cov_0[:, self.first_observed:] @ np.linalg.pinv(Cov_0[self.first_observed:, self.first_observed:]) @ Cov_0[:, self.first_observed:].T]
@@ -60,6 +88,11 @@ class KalmanFilter:
         self.F_lim = self.A[0] - self.K_lim @ self.H
 
     def S_star(self, wrt):
+        """
+        Computes the limiting Kalman filter covariance matrix derivatives S_j for j=1,...,k (see Lemma 3.7)
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
+        :return: Array of shape (len(wrt), dim, dim) with different derivatives in different rows.
+        """
         wrt = np.atleast_1d(wrt)
         BB_lim_partial = self.C[1 + wrt]
         right_side = np.einsum('jk, kl, lmi -> ijm', self.A[0], self.Sig_tt_lim, self.A[1 + wrt].T) + np.einsum('ijk, kl, lm -> ijm', self.A[1 + wrt], self.Sig_tt_lim, self.A[0].T) + BB_lim_partial
@@ -67,6 +100,11 @@ class KalmanFilter:
         return S_star_vectorized.reshape(np.size(wrt), self.dim, self.dim, order='F')
 
     def R_star(self, wrt):
+        """
+        Computes the limiting Kalman filter covariance matrix second derivatives R_ij for i,j = 1,...,k
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
+        :return: Array of shape (len(wrt) * (len(wrt) + 1) / 2, dim, dim) with second derivatives 11,12,...,kk in different rows.
+        """
         wrt = np.atleast_1d(wrt)
         k = int(np.sqrt(9 / 4 + 2 * (self.a.shape[0] - 1)) - 3 / 2)
         wrt2 = np.where(np.isin(np.triu_indices(k)[0], wrt) & np.isin(np.triu_indices(k)[1], wrt))[0]
@@ -93,6 +131,15 @@ class KalmanFilter:
         return R_star_vectorized.reshape(BB_lim_partial2.shape[0], self.dim, self.dim, order='F')
 
     def build_kalman_filter(self, observations, t_max=None, verbose=0, close_pb=True):
+        """
+        Computes the Kalman filter sequences X(t+1, t) and X(t, t).
+        :param observations: Array of shape (n, dim) containing the observations from the model
+        :param t_max: Maximal number of t in the sequence
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+            Can also be an instance of class tqdm.
+        :param close_pb: If verbose is an instance of class tqdm, this parameter specifies if the progressbar should
+            be closed after computing the Kalman filter. Default to True.
+        """
         if t_max is None:
             t_max = observations.shape[0]
         if self.Sig_tp1_t_list is None:
@@ -132,7 +179,16 @@ class KalmanFilter:
         self.X_hat_tp1_t_list = np.stack(X_hat_tp1_t_list)
         self.X_hat_tt_list = np.stack(X_hat_tt_list)
 
-    def build_kalman_filter_hom(self, observations, t_max=None, verbose=0, close_pb=True):  # TODO: Refactor "hom" method into normal methods
+    def build_kalman_filter_hom(self, observations, t_max=None, verbose=0, close_pb=True):
+        """
+        Computes the Kalman filter sequences X^hom(t+1, t) and X^hom(t, t) with limiting covariance matrices in place of time-dependent ones.
+        :param observations: Array of shape (n, dim) containing the observations from the model
+        :param t_max: Maximal number of t in the sequence
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+            Can also be an instance of class tqdm.
+        :param close_pb: If verbose is an instance of class tqdm, this parameter specifies if the progressbar should
+            be closed after computing the Kalman filter. Default to True.
+        """
         if t_max is None:
             t_max = observations.shape[0]
         if self.Sig_tp1_t_lim is None:
@@ -165,6 +221,16 @@ class KalmanFilter:
         self.X_hat_tt_list_hom = np.stack(X_hat_tt_list_hom)
 
     def deriv_filter_hom(self, observations, wrt, t_max=None, verbose=0, close_pb=True):
+        """
+        Computes the Kalman filter derivative sequences V^hom(t+1, t) and V^hom(t, t) with limiting covariance matrices in place of time-dependent ones.
+        :param observations: Array of shape (n, dim) containing the observations from the model
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
+        :param t_max: Maximal number of t in the sequence
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+            Can also be an instance of class tqdm.
+        :param close_pb: If verbose is an instance of class tqdm, this parameter specifies if the progressbar should
+            be closed after computing the Kalman filter. Default to True.
+        """
         wrt = np.atleast_1d(wrt)
         if t_max is None:
             t_max = observations.shape[0]
@@ -199,6 +265,17 @@ class KalmanFilter:
         return np.stack(V_tp1_t_list), np.stack(V_tt_list)
 
     def deriv2_filter_hom(self, observations, wrt, t_max=None, verbose=0, close_pb=True, deriv_filters=None):
+        """
+        Computes the Kalman filter second derivative sequences W^hom(t+1, t) and W^hom(t, t) with limiting covariance matrices in place of time-dependent ones.
+        :param observations: Array of shape (n, dim) containing the observations from the model
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
+        :param t_max: Maximal number of t in the sequence
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+            Can also be an instance of class tqdm.
+        :param close_pb: If verbose is an instance of class tqdm, this parameter specifies if the progressbar should
+            be closed after computing the Kalman filter. Default to True.
+        :param deriv_filters: If the derivatives sequences V^hom(t+1, t), V^hom(t, t) of the Kalman filter have been precomputed, they can be supplied as a tuple.
+        """
         wrt = np.atleast_1d(wrt)
         k = int(np.sqrt(9 / 4 + 2 * (self.a.shape[0] - 1)) - 3 / 2)
         wrt2 = np.where(np.isin(np.triu_indices(k)[0], wrt) & np.isin(np.triu_indices(k)[1], wrt))[0]
@@ -258,7 +335,30 @@ class KalmanFilter:
 
 
 class PolynomialModel:
+    """
+    This class instantiates a parametric polynomial state space model with respect to some fixed true parameter and contains methods
+    to compute QML estimators and to calculate the limiting QML estimator covariance matrices. For concrete use, this class needs to
+    be subclassed by an instance of a concrete model. This subclass has to contain a method `poly_A` for the polynomial semimartingale
+    characteristics matrix A in the sense of Eberlein and Kallsen [3, Theorem 6.25]
+    """
     def __init__(self, first_observed, init, dt, signature, params_names, params_bounds=None, true_param=None, wrt=None, scaling=1, warn=True):
+        """
+        :param first_observed: Integer between 0,..., dim-1 that denotes the first observed component of the state space model
+        :param init: Instance of class InitialDistribution for the distribution of X(0)
+        :param dt: Time increment of the discrete-time state space model
+        :param signature: String that specifies which components are differenced components and which components occur which which powers.
+            For example, the signature '1[1]_2d[1, 2]' specifies that the second component is differenced and occurs with powers 1 and 2,
+            i.e. the model (X1(t), ΔX2(t), (ΔX2)(t)^2) is used. The signature '1[1, 2], 2[1, 2, 4], 3d[1]' specifies that the model
+            (X1(t), X1(t)^2, X2(t), X2(t)^2, X2(t)^4, ΔX3(t)) is used.
+        :param params_names: Array of length k containing strings for the parameter names
+        :param params_bounds: Array of shape (k, 2) containing lower and upper bounds for each parameter in each row.
+        :param true_param: Array of length k containing the true parameter. Can be None if the true parameter is unknown.
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters that are to be estimated.
+        :param scaling: Integer or Array of length dim_c containing scaling factors for the components of the model. A scaling factor different from 1
+            can be of advantage for numerical purposes. If a PolynomialModel is instantiated with scaling=1, an optimal scaling factor is printed
+            to the console.
+        :param warn: Boolean specifying whether or not to suppress warnings.
+        """
         self.first_observed = first_observed
 
         if true_param is None:
@@ -334,6 +434,16 @@ class PolynomialModel:
             warnings.warn('Argument wrt was not used since the whole parameter has not yet been estimated. Please use method "setup_filter" after this has been done.', Warning)
 
     def state_space_params(self, param, deriv_order=0, wrt=None, return_stack=False):
+        """
+        Computes the state transition vector a, state transition matrix A and limiting noise covariance matrix C for the polynomial state space model
+        from the polynomial semimartingale characteristics matrix specified by the method 'poly_A'
+        :param param: Array of length k. Parameter at which to compute a, A and C.
+        :param deriv_order: Integer between 0 and 2. Specifies whether no derivatives, 0th and 1st derivatives or 0th, 1st and 2nd derivatives are to be computed.
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
+        :param return_stack: Boolean. If True, the outputs for a, A and C have all derivatives stacked on top of each other in the first dimension. If False and
+            deriv_order>=1, the outputs for a, A and C are lists of length 2 or 3 that contain the 0th, 1st (and 2nd) derivatives, respectively.
+        :return: a, A and C with shape according to the parameter 'return_stack'.
+        """
         wrt = np.atleast_1d(wrt)
         k = np.size(wrt)
         n_components = 1 + k * (deriv_order >= 1) + int(k * (k + 1) / 2) * (deriv_order == 2)
@@ -387,9 +497,31 @@ class PolynomialModel:
             return [a[0], a[1:(k + 1)], a[(k + 1):]], [A[0], A[1:(k + 1)], A[(k + 1):]], [C[0], C[1:(k + 1)], C[(k + 1):]]
 
     def poly_A(self, param, poly_order, deriv_order=0, wrt=None):
+        """
+        Computes the polynomial semimartingale characteristics matrix A in the sense of Eberlein and Kallsen [3, Theorem 6.25] for the underlying
+        time-continuous model. Needs to be overwritten by a subclass for a specific model.
+        :param param: Array of length k. Parameter at which to compute the matrix.
+        :param poly_order: Polynomial order up to which to evaluate the matrix
+        :param deriv_order: Integer between 0 and 2. Specifies whether no derivatives, 0th and 1st derivatives or 0th, 1st and 2nd derivatives are to be computed.
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
+        :return: Array of shape (..., n, n). The rows of the array contain all derivatives stacked on top of each other. The other two dimensions of shape n contain
+        the elements of the polynomial matrix (or its derivatives).
+        """
         pass
 
     def poly_B(self, param, poly_order, deriv_order=0, wrt=None, return_stack=False):
+        """
+        Computes the polynomial moment matrix of the discrete-time state space model in the sense of Kallsen and Richert [4, Lemma 2.10]. The signature of the model
+        specified by the init argument 'signature' is taken into account, i.e. the computed moment matrix already corresponds to the model with differenced components
+        and with multiple powers of components.
+        :param param: Array of length k. Parameter at which to compute the matrix.
+        :param poly_order: Polynomial order up to which to evaluate the matrix.
+        :param deriv_order: Integer between 0 and 2. Specifies whether no derivatives, 0th and 1st derivatives or 0th, 1st and 2nd derivatives are to be computed.
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
+        :param return_stack: Boolean. If True, the output for the matrix has all derivatives stacked on top of each other in the first dimension. If False and
+            deriv_order>=1, the output for the matrix is a list of length 2 or 3 that contains the 0th, 1st (and 2nd) derivatives, respectively.
+        :return: The polynomial moment matrix with shape according to the parameter 'return_stack'.
+        """
         wrt = np.atleast_1d(wrt)
         k = np.size(wrt)
         poly_A = self.poly_A(param, max(sum(self.signature, [])) * poly_order, deriv_order, wrt)
@@ -475,6 +607,13 @@ class PolynomialModel:
             return [poly_B_sig[0], poly_B_sig[1:(k + 1)], poly_B_sig[k + 1:]]
 
     def calc_filter_B(self, poly_order):
+        """
+        Computes the polynomial moment matrix of the filtered state space model \overline{X}(t) or the filtered state space model \underline{X}(t) from Section 3.3 of
+        Kallsen and Richert [5] using the formulas from Proposition 2.14 of Kallsen and Richert [4] and stores them in the directory saves/[ModelName]/Polynomial Matrices
+        :param poly_order: Integer 2 or 4. If poly_order=2, the polynomial order 2 moment matrix for \underline{X}(t) is computed. If poly_order=4, the polynomial
+            order 4 moment matrix for \overline{X}(t) is computed.
+        :return: Polynomial moment matrix of shape (n, n)
+        """
         if np.isnan(self.true_param).any():
             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
 
@@ -526,8 +665,8 @@ class PolynomialModel:
             dict1, dict2 = return_dict(dim1, order), return_dict(dim2, order)
             raw_collections1 = np.array([np.sort(dict1[i][dict1[i] != 0]).tolist() for i in range(n_dim(dim1, order))], dtype=object)
             raw_collections2 = np.array([np.sort(dict2[i][dict2[i] != 0]).tolist() for i in range(n_dim(dim2, order))], dtype=object)
-            locations1 = [np.where(np.in1d(dict1[i], raw_collections1[i]))[0][np.argsort(dict1[i][dict1[i] != 0])] for i in range(n_dim(dim1, order))]
-            locations2 = [np.where(np.in1d(dict2[i], raw_collections2[i]))[0][np.argsort(dict2[i][dict2[i] != 0])] for i in range(n_dim(dim2, order))]
+            locations1 = [np.where(np.isin(dict1[i], raw_collections1[i]))[0][np.argsort(dict1[i][dict1[i] != 0])] for i in range(n_dim(dim1, order))]
+            locations2 = [np.where(np.isin(dict2[i], raw_collections2[i]))[0][np.argsort(dict2[i][dict2[i] != 0])] for i in range(n_dim(dim2, order))]
             collections1 = np.array([x for i, x in enumerate(raw_collections1.tolist()) if x not in raw_collections1.tolist()[:i]], dtype=object)
             collections2 = np.array([x for i, x in enumerate(raw_collections2.tolist()) if x not in raw_collections2.tolist()[:i]], dtype=object)
             coll_locator1 = np.array([collections1.tolist().index(x) for x in raw_collections1])
@@ -690,6 +829,12 @@ class PolynomialModel:
                 np.savetxt(filepath, self.filter_B2)
 
     def setup_filter(self, wrt):
+        """
+        Sets up the matrices Y(t) and C(t) as well as the vector c(t) in the sense of Kallsen and Richert [4, equation (2.9)] for the filtered state space models
+        \overline{X}(t) and \underline{X}(t). If no 'true_param' has been specified when initializing the PolynomialModel class, the setup_filter method has to be called
+        before computing asymptotic QML estimator covariance matrices via 'compute_V'.
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
+        """
         if np.isnan(self.true_param).any():
             raise Exception('Full underlying parameter has to be given or has to be estimated first.')
 
@@ -798,10 +943,41 @@ class PolynomialModel:
             self.calc_filter_B(poly_order=2)
 
     def generate_observations(self, t_max, inter_steps, seed, verbose):
+        """
+        Generates a discretised trajectory with stepsize self.dt of the underlying time-continuous model and stores it in the directory
+        saves/[ModelName]/Observations. The variable self.true_param must not be None to use this method. If there are already observations,
+        new observations are appended to the end of the old ones. Needs to be overwritten by a subclass for a specific model.
+        :param t_max: Maximal number of t for the simulated X(t)
+        :param inter_steps: Number of steps to compute internally between steps of size self.dt to reduce the simulation bias
+        :param seed: Random seed to use
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+        """
         pass
 
     @classmethod
     def from_observations(cls, first_observed, init, dt, signature, obs, inter_steps=None, true_param=None, wrt=None, scaling=1, seed=None, warn=True):
+        """
+        Initializes an instance of the class PolynomialModel by either simulating observations via the generate_observations method or via importing
+        observations data from a csv or txt file.
+        :param first_observed: Integer between 0,..., dim-1 that denotes the first observed component of the state space model
+        :param init: Instance of class InitialDistribution for the distribution of X(0)
+        :param dt: Time increment of the discrete-time state space model
+        :param signature: String that specifies which components are differenced components and which components occur which which powers.
+            For example, the signature '1[1]_2d[1, 2]' specifies that the second component is differenced and occurs with powers 1 and 2,
+            i.e. the model (X1(t), ΔX2(t), (ΔX2)(t)^2) is used. The signature '1[1, 2], 2[1, 2, 4], 3d[1]' specifies that the model
+            (X1(t), X1(t)^2, X2(t), X2(t)^2, X2(t)^4, ΔX3(t)) is used.
+        :param obs: Number of observations
+        :param inter_steps: Number of steps to compute internally between steps of size self.dt to reduce the simulation bias. Only required if
+            observations are simulated.
+        :param true_param: Array of length k containing the true parameter. Only required if observations are simulated.
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters that are to be estimated.
+        :param scaling: Integer or Array of length dim_c containing scaling factors for the components of the model. A scaling factor different from 1
+            can be of advantage for numerical purposes. If a PolynomialModel is instantiated with scaling=1, an optimal scaling factor is printed
+            to the console.
+        :param seed: Random seed to use
+        :param warn: Boolean specifying whether or not to suppress warnings.
+        :return: Instance of PolynomialModel class
+        """
         obj = cls(first_observed=first_observed, init=init, dt=dt, signature=signature, true_param=true_param, wrt=wrt, scaling=scaling, warn=warn)
 
         if isinstance(obs, str):
@@ -1446,7 +1622,6 @@ class HestonModel(PolynomialModel):
         if self.observations is not None:
             observations = np.vstack((self.observations, observations[1:]))
             self.seed = str(self.seed) + '+' + str(seed) if self.seed is not None else seed
-            t_max = observations.shape[0] - 1
         else:
             self.seed = seed
 
@@ -1541,7 +1716,6 @@ class OUNIGModel(PolynomialModel):
         if self.observations is not None:
             observations = np.vstack((self.observations, observations[1:]))
             self.seed = str(self.seed) + '+' + str(seed) if self.seed is not None else seed
-            t_max = observations.shape[0] - 1
         else:
             self.seed = seed
 
@@ -1554,47 +1728,31 @@ class OUNIGModel(PolynomialModel):
 
 
 if __name__ == '__main__':
-
-    ### Define suitable initial distribution
-    # init2 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
-    init4 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
-    # init8 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0.3**6, 0.3**8, 0, 0, 0, 0])
-    # init = InitialDistribution(dist='Dirac', hyper=[0.5, 1])
-    # init = InitialDistribution(dist='Gamma_Dirac', hyper=[0, 0])
-
-
-    ### Test the calculation of asymptotic covariances #1 (No observations needed)
-    # model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 3.28714954, 90% CI after 200 000 observations (200k years): [0.28791, 0.31209]
-    # model = HestonModel(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)  # STD: 160.07226146, 90% CI after 10 years of data: [-0.23745, 0.83745]
-    model = HestonModel(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)  # STD: 81.81816321, 90% CI after 10 years of data: [0.02529, 0.57471]
-    # model = HestonModel(first_observed=2, init=init4, dt=1/120000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[7.2, 210.8], warn=False)  # STD: 181.88585592, 90% CI after 10 years of data: [0.02689, 0.57311]
-    # model = HestonModel(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[2.7, 61.4], warn=False)
-    # model = OUNIGModel(first_observed=1, init=init, dt=1, signature='1[1]_2[1]', true_param=np.array([1, 0.5, 3]), wrt=2, warn=False)
-
+    ### Isolated computation of the asymptotic standard deviation of the vol-vol estimator [dt = 1, based on (v, ΔY, (ΔY)^2), no observations needed]
+    init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+    model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, warn=False)
     V, Std, Corr = model.compute_V()
 
-
-    ### Test the estimation #2 (Simulation study with observations)
-    # model = HestonModel.from_observations(first_observed=1, init=init2, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20, warn=False)
-    # model = HestonModel.from_observations(first_observed=1, init=init2, dt=1/24000, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20)
-    # model = HestonModel.from_observations(first_observed=2, init=init4, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[20, 140], seed=20)
-    # model = HestonModel.from_observations(first_observed=4, init=init8, dt=1/24000, signature='1[1, 2, 3, 4]_2d[1, 2, 4, 8]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), scaling=[2.7, 61.4], seed=20)
-
-    # result = model.fit_qml(fit_parameter=2, initial=3, t=200000)
-    # result = model.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.3], t_max=1500)
-    # V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
-
-
-    ### Test the estimation #3 (Semi-Real-world scenario; observations externally given, just one parameter unknown)
-    # model = HestonModel.from_observations(first_observed=1, init=init2, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, np.nan, -0.5]))
-    #
-    # result = model.fit_qml(fit_parameter=2, initial=0.3, t=200000, update_estimate=True)
-    # V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
-    # model.setup_filter(wrt=2)
+    ### Isolated computation of the asymptotic standard deviation of the vol-vol estimator [dt = 1/24000, based on (v, v^2, ΔY, (ΔY)^2, (ΔY)^4), no observations needed]
+    # init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.3**4, 0, 0, 0])
+    # model = HestonModel(first_observed=1, init=init, dt=1/24000, signature='1[1, 2]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=2, scaling=[20, 140], warn=False)
     # V, Std, Corr = model.compute_V()
 
+    ### Joint computation of the asymptotic covariance matrix of the estimator [dt = 1, based on (v, ΔY, (ΔY)^2), no observations needed]
+    # init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0, 0])
+    # model = HestonModel(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), wrt=[0, 1, 2, 3], warn=False)
+    # V, Std, Corr = model.compute_V()
 
-    ### Test the new restructuring #3 (Real-world scenario; observations externally given, all parameters unknown)
-    # model = HestonModel.from_observations(first_observed=1, init=init2, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]')
-    # seq = model.fit_qml_sequence(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t_max=10000)
-    # res = model.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
+    ### Initialize model by simulating observations, compute QML estimators and estimate the asymptotic QML estimator standard deviation
+    # init = InitialDistribution(dist='Dirac', hyper=[0.3 ** 2, 0, 0])
+    # model = HestonModel.from_observations(first_observed=1, init=init, dt=1, signature='1[1]_2d[1, 2]', obs=200000, inter_steps=250, true_param=np.array([1, 0.4 ** 2, 0.3, -0.5]), seed=20, warn=False)
+    # result = model.fit_qml(fit_parameter=2, initial=0.5, t=200000)
+    # seq = model.fit_qml_sequence(fit_parameter=[0, 2], initial=[1, 0.5], t_max=1500)
+    # V, Std, Corr = model.compute_V(kind='estimate', wrt=2, verbose=1)
+
+    ### Initialize model with observations externally given, compute QML estimators and compute the asymptotic QML estimator standard deviation
+    # init = InitialDistribution(dist='Dirac', hyper=[0.3 ** 2, 0, 0])
+    # model = HestonModel.from_observations(first_observed=1, init=init, obs='observations_par=[1.000, 0.160, 0.300, -0.500]_dt=1.0e+00_sig1[1]_2d[1, 2]_seed20_200000obs.txt', dt=1, signature='1[1]_2d[1, 2]')
+    # result = model.fit_qml(fit_parameter=[0, 1, 2, 3], initial=[1, 0.4**2, 0.3, -0.5], t=10000, update_estimate=True)
+    # model.setup_filter(wrt=2)
+    # V, Std, Corr = model.compute_V()
