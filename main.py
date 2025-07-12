@@ -608,10 +608,10 @@ class PolynomialModel:
 
     def calc_filter_B(self, poly_order):
         """
-        Computes the polynomial moment matrix of the filtered state space model \overline{X}(t) or the filtered state space model \underline{X}(t) from Section 3.3 of
+        Computes the polynomial moment matrix of the filtered state space model overline{X}(t) or the filtered state space model underline{X}(t) from Section 3.3 of
         Kallsen and Richert [5] using the formulas from Proposition 2.14 of Kallsen and Richert [4] and stores them in the directory saves/[ModelName]/Polynomial Matrices
-        :param poly_order: Integer 2 or 4. If poly_order=2, the polynomial order 2 moment matrix for \underline{X}(t) is computed. If poly_order=4, the polynomial
-            order 4 moment matrix for \overline{X}(t) is computed.
+        :param poly_order: Integer 2 or 4. If poly_order=2, the polynomial order 2 moment matrix for underline{X}(t) is computed. If poly_order=4, the polynomial
+            order 4 moment matrix for overline{X}(t) is computed.
         :return: Polynomial moment matrix of shape (n, n)
         """
         if np.isnan(self.true_param).any():
@@ -831,7 +831,7 @@ class PolynomialModel:
     def setup_filter(self, wrt):
         """
         Sets up the matrices Y(t) and C(t) as well as the vector c(t) in the sense of Kallsen and Richert [4, equation (2.9)] for the filtered state space models
-        \overline{X}(t) and \underline{X}(t). If no 'true_param' has been specified when initializing the PolynomialModel class, the setup_filter method has to be called
+        overline{X}(t) and underline{X}(t). If no 'true_param' has been specified when initializing the PolynomialModel class, the setup_filter method has to be called
         before computing asymptotic QML estimator covariance matrices via 'compute_V'.
         :param wrt: Integer or list of integers between 0 and k-1 that specifies the parameters differentiated with respect to.
         """
@@ -998,6 +998,14 @@ class PolynomialModel:
         return obj
 
     def log_lik(self, param, t, verbose=0):
+        """
+        Computes the log-likelihood of the Gaussian equivalent of the polynomial state space model.
+        :param param: Array of length k. Parameter at which to compute the matrix.
+        :param t: Integer. Number of observations of the polynomial state space model to use for computation of the log-likelihood.
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+            Can also be an instance of class tqdm.
+        :return: Value of the log-likelihood.
+        """
         a, A, C = self.state_space_params(param=param, return_stack=True)
         kfilter = KalmanFilter(dim=self.dim, a=a, A=A, C=C, E_0=partial(self.init.E_0, param=param), Cov_0=partial(self.init.Cov_0, param=param), first_observed=self.first_observed)
         kfilter.build_covariance(t_max=t)
@@ -1013,6 +1021,16 @@ class PolynomialModel:
         return np.sum(-0.5 * (Sig_tp1_t_list_det[:t] + np.einsum('ij, ijk, ik -> i', eps, Sig_tp1_t_list_inv[:t, :, :], eps)))
 
     def fit_qml(self, fit_parameter, initial, t=None, verbose=1, update_estimate=False):
+        """
+        Determines the quasi-maximum likelihood estimator of the model.
+        :param fit_parameter: Integer or list of integers between 0 and k-1 that specifies which components of the parameter are estimated.
+        :param initial: float or array-like that specifies the parameter guess
+        :param t: Integer. Number of observations of the polynomial state space model to use for computation of the log-likelihood.
+        :param verbose: If verbose is 1, a minimization callback showing the minimization progress is shown.
+        :param update_estimate: Boolean. If update_estimate=True, the argument self.true_param of the PolynomialModel class is updated
+            by the estimated parameter.
+        :return: float or array containing the quasi-maximum likelihood estimate
+        """
         global it
         it = 1
 
@@ -1057,6 +1075,18 @@ class PolynomialModel:
         return result
 
     def fit_qml_sequence(self, fit_parameter, initial, t_max=None, every=50, verbose=1, update_estimate=False):
+        """
+        Computes a sequence of quasi-maximum likelihood estimators of the model. Each current estimate is used as an initial guess for the subsequent estimate.
+        Stores the computed qml sequence in the directory saves/[ModelName]/QML Sequences
+        :param fit_parameter: Integer or list of integers between 0 and k-1 that specifies which components of the parameter are estimated.
+        :param initial: float or array-like that specifies the parameter guess
+        :param t_max: Integer. Maximum number of observations of X(t) to use in the sequence
+        :param every: Integer. Increment of observations of X(t) between two qml estimators of the sequence.
+        :param verbose: If verbose is 1, either a progressbar is shown (if the program is run) or a console callback is shown.
+        :param update_estimate: Boolean. If update_estimate=True, the argument self.true_param of the PolynomialModel class is updated
+            by the ultimate estimated parameter from the sequence.
+        :return: A sequence of qml estimators corresponding to every, 2*every, ..., t_max observations
+        """
         start = time()
         fit_parameter = np.atleast_1d(fit_parameter).tolist()
 
@@ -1106,6 +1136,25 @@ class PolynomialModel:
         return qml_list
 
     def compute_U(self, kind='explicit', wrt=None, t_max=None, verbose=0, filter_unobserved=True, kfilter=None, deriv_filters=None, close_pb=True, save_raw=False):
+        """
+        Either performs Algorithm 3.12 the compute the matrix U_\vartheta from Theorem 3.4 explicitly or computes a sequence of the estimators (3.5)
+        for U_\vartheta.Uses self.true_param for \vartheta. Stores the output in the directory saves/[ModelName]/Covariance
+        :param kind: String 'explicit' or 'estimate' that specifies whether to use Algorithm 3.12 or the estimator (3.5)
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies which components of the parameter are estimated. Can be None if
+            the setup_filter has been called first.
+        :param t_max: Integer. Maximmal number of observations of the polynomial state space model to use for computation of U. Only required if kind='estimate'.
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+            Can also be an instance of class tqdm.
+        :param filter_unobserved: Boolean. If True, the modification from Remark 3.10 is used where unavailable unobservable components are replaced
+            by their Kalman filter. Only used if kind='estimate'.
+        :param kfilter: A pre-instantiated object of class KalmanFilter can be provided here. If kfilter=None, a new KalmanFilter object is initialized.
+        :param deriv_filters: If the derivatives sequences V^hom(t+1, t), V^hom(t, t) of the Kalman filter have been precomputed, they can be supplied as a tuple.
+        :param close_pb: If verbose is an instance of class tqdm, this parameter specifies if the progressbar should
+            be closed after computing the Kalman filter. Default to True. Only required if kind='estimate'.
+        :param save_raw: Boolean. If save_raw=True the summands of the estimator (3.5) are stored in the directory saves/[ModelName]/Covariance instead
+            of their means. Only used if kind='estimate'.
+        :return: Array containing the matrix U_\vartheta (if kind='explicit') or a sequence of estimators (3.5) for U_\vartheta (if kind='estimate').
+        """
         if wrt is None:
             if self.wrt is None:
                 raise Exception('Method setup_filter needs to be called first or argument wrt has to be specified.')
@@ -1271,6 +1320,23 @@ class PolynomialModel:
             raise Exception('Argument kind needs to be set to "explicit" or "estimate".')
 
     def compute_W(self, kind='explicit', wrt=None, t_max=None, verbose=0, kfilter=None, deriv_filters=None, close_pb=True, save_raw=False):
+        """
+        Either performs Algorithm 3.12 the compute the matrix W(\vartheta) from Theorem 3.4 explicitly or computes a sequence of estimators described
+        before Remark 3.10 for W(\vartheta). Uses self.true_param for \vartheta. Stores the output in the directory saves/[ModelName]/Covariance
+        :param kind: String 'explicit' or 'estimate' that specifies whether to use Algorithm 3.12 or the estimator described before Remark 3.10.
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies which components of the parameter are estimated. Can be None if
+            the setup_filter has been called first.
+        :param t_max: Integer. Maximmal number of observations of the polynomial state space model to use for computation of W. Only required if kind='estimate'.
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+            Can also be an instance of class tqdm.
+        :param kfilter: A pre-instantiated object of class KalmanFilter can be provided here. If kfilter=None, a new KalmanFilter object is initialized.
+        :param deriv_filters: If the derivatives sequences V^hom(t+1, t), V^hom(t, t) of the Kalman filter have been precomputed, they can be supplied as a tuple.
+        :param close_pb: If verbose is an instance of class tqdm, this parameter specifies if the progressbar should
+            be closed after computing the Kalman filter. Default to True. Only required if kind='estimate'.
+        :param save_raw: Boolean. If save_raw=True the summands of the estimator described before Remark 3.10 are stored in the directory
+            saves/[ModelName]/Covariance instead of their means. Only used if kind='estimate'.
+        :return: Array containing the matrix W(\vartheta) (if kind='explicit') or a sequence of estimators for W(\vartheta) (if kind='estimate').
+        """
         if wrt is None:
             if self.wrt is None:
                 raise Exception('Method setup_filter needs to be called first or argument wrt has to be specified.')
@@ -1400,6 +1466,23 @@ class PolynomialModel:
             raise Exception('Argument kind needs to be set to "explicit" or "estimate".')
 
     def compute_V(self, kind='explicit', wrt=None, t_max=None, verbose=0, filter_unobserved=True, from_raw=None, every=None):
+        """
+        Either performs Algorithm 3.12 the compute the matrix V_\vartheta from Theorem 3.4 explicitly or computes a sequence of estimators described
+        before Remark 3.10 for V_\vartheta. Uses self.true_param for \vartheta. Stores the output in the directory saves/[ModelName]/Covariance
+        :param kind: String 'explicit' or 'estimate' that specifies whether to use Algorithm 3.12 or the estimator described before Remark 3.10.
+        :param wrt: Integer or list of integers between 0 and k-1 that specifies which components of the parameter are estimated. Can be None if
+            the setup_filter has been called first.
+        :param t_max: Integer. Maximmal number of observations of the polynomial state space model to use for computation of V. Only required if kind='estimate'.
+        :param verbose: If verbose is 0, no progress is visually tracked. If verbose is 1, a progressbar is shown.
+            Can also be an instance of class tqdm.
+        :param filter_unobserved: Boolean. If True, the modification from Remark 3.10 is used where unavailable unobservable components are replaced
+            by their Kalman filter. Only used if kind='estimate'.
+        :param from_raw: Boolean. If from_raw=True the computation used the raw summands for the U and W estimators stored in the directory
+            saves/[ModelName]/Covariance. Only used if kind='estimate'.
+        :param every: Increment of observations of X(t) used for the estimate sequence for V_\vartheta. Returns a sequence corresponding to
+            every, 2*every, ..., t_max observations. Only used if kind='estimate'.
+        :return: Array containing the matrix W(\vartheta) (if kind='explicit') or a sequence of estimators for W(\vartheta) (if kind='estimate').
+        """
         if wrt is None:
             if self.wrt is None:
                 raise Exception('Method setup_filter needs to be called first or argument wrt has to be specified.')
