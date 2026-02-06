@@ -69,10 +69,17 @@ class KalmanFilter:
         Cov_0 = self.Cov_0()
         Sig_tp1_t_list = [Cov_0]
         Sig_tt_list = [Cov_0 - Cov_0[:, self.first_observed:] @ np.linalg.pinv(Cov_0[self.first_observed:, self.first_observed:]) @ Cov_0[:, self.first_observed:].T]
+        # tt_inv = np.eye(self.dim) - Cov_0 @ self.H.T @ np.linalg.pinv(Cov_0[self.first_observed:, self.first_observed:]) @ self.H
+        # Sig_tt_list = [tt_inv @ Cov_0 @ tt_inv.T]
         Sig_tp1_t_list.append(self.A[0] @ Sig_tt_list[0] @ self.A[0].T + self.C[0])
         Sig_tp1_t = Sig_tp1_t_list[-1]
         for t in range(1, t_max):
             Sig_tt = Sig_tp1_t - Sig_tp1_t[:, self.first_observed:] @ np.linalg.inv(Sig_tp1_t[self.first_observed:, self.first_observed:]) @ Sig_tp1_t[:, self.first_observed:].T
+            # tt_inv = np.eye(self.dim) - Sig_tp1_t @ self.H.T @ np.linalg.inv(Sig_tp1_t[self.first_observed:, self.first_observed:]) @ self.H
+            # Sig_tt = tt_inv @ Sig_tp1_t @ tt_inv.T
+            # Sig_tt[self.first_observed:, self.first_observed:] = 0.
+            # Sig_tt[:self.first_observed, self.first_observed:] = 0.
+            # Sig_tt[self.first_observed:, :self.first_observed] = 0.
             Sig_tp1_t = self.A[0] @ Sig_tt @ self.A[0].T + self.C[0]
             if np.isclose(Sig_tp1_t, Sig_tp1_t_list[-1], atol=0, rtol=1e-8).all():
                 break

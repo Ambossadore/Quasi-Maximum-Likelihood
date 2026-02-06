@@ -54,7 +54,7 @@ class InitialDistribution:
         elif self.dist == 'Gamma_Dirac':
             kappa, theta, sigma, rho = param
             if deriv_order == 0:
-                arr = np.zeros((3, 3))
+                arr = np.zeros((np.size(self.hyper) + 1, np.size(self.hyper) + 1))
                 arr[0, 0] = theta * sigma**2 / (2 * kappa)
                 return arr
             elif deriv_order == 1:
