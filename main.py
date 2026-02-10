@@ -353,7 +353,7 @@ class PolynomialModel:
         :param first_observed: Integer between 0,..., dim-1 that denotes the first observed component of the state space model
         :param init: Instance of class InitialDistribution for the distribution of X(0)
         :param dt: Time increment of the discrete-time state space model
-        :param signature: String that specifies which components are differenced components and which components occur which which powers.
+        :param signature: String that specifies which components are differenced components and which components occur with which powers.
             For example, the signature '1[1]_2d[1, 2]' specifies that the second component is differenced and occurs with powers 1 and 2,
             i.e. the model (X1(t), ΔX2(t), (ΔX2)(t)^2) is used. The signature '1[1, 2], 2[1, 2, 4], 3d[1]' specifies that the model
             (X1(t), X1(t)^2, X2(t), X2(t)^2, X2(t)^4, ΔX3(t)) is used.
@@ -364,7 +364,7 @@ class PolynomialModel:
         :param scaling: Integer or Array of length dim_c containing scaling factors for the components of the model. A scaling factor different from 1
             can be of advantage for numerical purposes. If a PolynomialModel is instantiated with scaling=1, an optimal scaling factor is printed
             to the console.
-        :param warn: Boolean specifying whether or not to suppress warnings.
+        :param warn: Boolean specifying whether to suppress warnings.
         """
         self.first_observed = first_observed
 
