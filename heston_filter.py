@@ -22,7 +22,7 @@ def particle_filter_heston(N, param, dt, Delta_Y, verbose=1):
     v_filtered[0] = np.mean(v_particles)
     v_cond_variance[0] = np.var(v_particles)
 
-    t = trange(1, K) if verbose else range(1, K)
+    t = trange(1, K, desc='Computing particle filter') if verbose else range(1, K)
     for i in t:
         var_obs = np.maximum(v_particles, 1e-9) * dt
         log_likelihood = -0.5 * np.log(var_obs) - (Delta_Y[i] ** 2) / (2 * var_obs)
@@ -35,7 +35,7 @@ def particle_filter_heston(N, param, dt, Delta_Y, verbose=1):
         ESS = 1.0 / np.sum(weights ** 2)  # Effective Sample Size (ESS)
 
         if ESS < N / 2.0:
-            indices = systematic_resample(weights)
+            indices = resample(weights)
             v_particles = v_particles[indices]
             log_weights = np.zeros(N) - np.log(N)
             weights = np.ones(N) / N
@@ -55,7 +55,7 @@ def particle_filter_heston(N, param, dt, Delta_Y, verbose=1):
     return v_filtered, v_cond_variance
 
 
-def systematic_resample(weights):
+def resample(weights):
     N = np.size(weights)
     positions = (np.arange(N) + np.random.random()) / N
     indexes = np.zeros(N, dtype='int')
@@ -104,32 +104,6 @@ if __name__ == '__main__':
         errors[i] = v_cond_variance
 
     particle_mse = errors.mean(axis=0)
-    np.savetxt('particle_mse.txt', particle_mse)
-
-    # init3 = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0., 0., 0.])
-    # scaling = [1, 1]
-    # model3 = HestonModel(first_observed=1, init=init3, dt=1/250, signature='1[1]_2d[1, 2, 4]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), scaling=scaling, warn=False)
-    # model3.observations = np.hstack((model1.observations, model1.observations[:, 1:2]**4))
-    # model3.observations[:, 0] *= scaling[0]
-    # model3.observations[:, 1] *= scaling[1]
-    # model3.observations[:, 2] *= scaling[1]**2
-    # model3.observations[:, 3] *= scaling[1]**4
-    # a3, A3, C3 = model3.state_space_params(model3.true_param, return_stack=True)
-    # partial_E_0 = lambda: model3.init.E_0(param=model3.true_param) * scaling[0]
-    # partial_Cov_0 = lambda: model3.init.Cov_0(param=model3.true_param) * scaling[1]
-    # model3.kalman_filter = KalmanFilter(dim=model3.dim, a=a3, A=A3, C=C3, E_0=partial_E_0, Cov_0=partial_Cov_0, first_observed=model3.first_observed)
-    # model3.kalman_filter.build_covariance()
-    # model3.kalman_filter.build_kalman_filter(observations=model3.observations)
-
-    t = np.arange(0, 8 + 1 / 250, 1 / 250)
-    plt.plot(t, model1.observations[:, 0], linewidth=0.8)
-    plt.plot(t, model2.kalman_filter.X_hat_tt_list[:, 0], linewidth=0.8, color='C2')
-    plt.plot(t, model1.kalman_filter.X_hat_tt_list[:, 0], linewidth=0.8, color='C1')
-    plt.plot(t, v_particle_filter, linewidth=0.8, color='C3')
-    plt.legend([r'$v(t)$', r'$\widehat v(t, t)^{(1)}$', r'$\widehat v(t, t)^{(2)}$', r'$\widehat v(t, t)^{\mathrm{part.}}$'])
-    plt.grid(alpha=0.4)
-    plt.xlabel('$t$')
-    plt.ylabel(r'$v$')
 
     t = np.arange(0, 8 + 1 / 250, 1 / 250)
     Sig_tt_1 = np.append(model1.kalman_filter.Sig_tt_list[:, 0, 0], np.repeat(model1.kalman_filter.Sig_tt_list[-1, 0, 0], len(t) - len(model1.kalman_filter.Sig_tt_list[:, 0, 0])))
@@ -184,4 +158,3 @@ if __name__ == '__main__':
     plt.setp(ax4.get_yticklabels(), visible=False)
     ax4.legend([r'$v(t)$', r'$\widehat v(t, t)^{(2)}$'])
     gs.tight_layout(fig, rect=[0., 0., 0.97, 0.97])
-    fig.savefig('./heston_filter.png', dpi=1000)

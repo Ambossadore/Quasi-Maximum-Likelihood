@@ -1,7 +1,7 @@
 # Quasi-Maximum Likelihood Estimation
 #### Joint Work with Jan Kallsen
 
-This module contains the codebase for applied Quasi-Maximum Likelihood estimation of partially observed affine [2] and polynomial [1] processes. This includes:
+This module contains the codebase for filtering and Quasi-Maximum Likelihood estimation of partially observed affine [2] and polynomial [1] processes. This includes:
 
 - A class `KalmanFilter` for optimal discrete-time linear filtering of partially observed polynomial processes (see Kallsen and Richert [4])
 - A base class `PolynomialModel` for calculating consistent Quasi-Maximum Likelihood estimators for a given polynomial state space model (see Kallsen and Richert [5])
