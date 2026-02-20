@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy.integrate import quad_vec
 from scipy.integrate import quad
 from scipy.special import iv, ive
+from scipy.interpolate import CubicSpline
 
 
 def heston_char(u, dt, v, param):
@@ -69,70 +70,6 @@ def _phi_intvar_cond_endpoints(alpha, v0, vT, dt, kappa, m, sigma):
     ratio = num_scaled * np.exp(np.real(z_num) - z_den) / den_scaled
 
     return pref * expo * ratio
-
-
-class BridgeReturnPDF:
-    """
-    Precomputes the u-grid + trapezoid weights so that repeated calls
-    p(r | v0, vT) are as fast as possible for fixed (dt, theta, U, M).
-
-    Use:
-        eng = BridgeReturnPDF(dt, kappa, m, sigma, rho, U=150, M=2048)
-        val = eng.pdf(r, v0, vT)
-    """
-
-    def __init__(self, dt, kappa, m, sigma, rho, U=200.0, M=4096):
-        self.dt = float(dt)
-        self.kappa = float(kappa)
-        self.m = float(m)
-        self.sigma = float(sigma)
-        self.rho = float(rho)
-
-        self.U = float(U)
-        self.M = int(M)
-
-        # u-grid [0, U] with M intervals -> M+1 points
-        u = np.linspace(0.0, self.U, self.M + 1)
-        du = u[1] - u[0]
-
-        # trapezoid weights on [0, U]
-        w = np.full_like(u, du, dtype=np.float64)
-        w[0] *= 0.5
-        w[-1] *= 0.5
-
-        self.u = u
-        self.w = w
-
-        # precompute parts used in s(u)
-        self.u2 = u * u
-
-    def _cf_dY_cond_endpoints(self, v0, vT):
-        """
-        Ψ(u) = E[exp(i u ΔY) | v0, vT] evaluated on self.u-grid.
-        """
-        u = self.u
-
-        # constant mean part
-        mu_const = (self.rho / self.sigma) * (vT - v0 - self.kappa * self.m * self.dt)
-
-        # s(u) = 0.5(1-rho^2)u^2 - i u rho kappa/sigma
-        s = 0.5 * (1.0 - self.rho * self.rho) * self.u2 - 1j * u * (self.rho * self.kappa / self.sigma)
-
-        # Laplace = Φ(i s)
-        alpha = 1j * s
-        phi_I = _phi_intvar_cond_endpoints(alpha, v0, vT, self.dt, self.kappa, self.m, self.sigma)
-
-        return np.exp(1j * u * mu_const) * phi_I
-
-    def pdf(self, r, v0, vT):
-        """
-        p(r | v0, vT) via 1D Fourier inversion:
-            p(r) = (1/π) ∫_0^∞ Re( e^{-i u r} Ψ(u) ) du
-        approximated on [0, U] with trapezoidal rule.
-        """
-        psi = self._cf_dY_cond_endpoints(float(v0), float(vT))
-        integrand = np.real(np.exp(-1j * self.u * float(r)) * psi)
-        return float(np.dot(self.w, integrand) / np.pi)
 
 
 def _psi_dY_cond_endpoints(u, v0, vT, dt, kappa, m, sigma, rho):
@@ -256,137 +193,6 @@ def _phi_intvar_cond_endpoints(alpha, v0, vT, dt, kappa, m, sigma):
 
 class BridgeReturnPDF:
     """
-    Exact (up to 1D quadrature) density p(r | v0, vT) using Broadie–Kaya CF.
-
-    Vectorization:
-      - pdf_r(r_vec, v0, vT)       -> (R,) for fixed endpoints
-      - pdf_pairs(r, v0_vec, vT_vec)-> (P,) for fixed r
-      - pdf_matrix(r_vec, v0_vec, vT_vec)-> (P,R) for all combinations (via matmul)
-
-    Notes:
-      - dt, kappa, m, sigma, rho fixed per instance
-      - u-grid fixed per instance
-    """
-
-    def __init__(self, dt, kappa, m, sigma, rho, U=200.0, M=4096):
-        self.dt = float(dt)
-        self.kappa = float(kappa)
-        self.m = float(m)
-        self.sigma = float(sigma)
-        self.rho = float(rho)
-
-        self.U = float(U)
-        self.M = int(M)
-
-        u = np.linspace(0.0, self.U, self.M + 1)
-        du = u[1] - u[0]
-        w = np.full_like(u, du, dtype=np.float64)
-        w[0] *= 0.5
-        w[-1] *= 0.5
-
-        self.u = u
-        self.w = w
-        self.u2 = u * u
-
-    def cf_dY_cond_endpoints(self, v0, vT):
-        """
-        Ψ(u) = E[exp(i u ΔY) | v0, vT] evaluated on self.u
-        Vectorized in v0,vT: returns array with shape broadcast(v0,vT) + (M+1,)
-        """
-        v0 = np.asarray(v0, dtype=np.float64)
-        vT = np.asarray(vT, dtype=np.float64)
-
-        u = self.u  # (K,)
-        # Broadcast v0,vT to leading shape (...,)
-        lead_shape = np.broadcast(v0, vT).shape
-
-        # mu_const: (...,)
-        mu_const = (self.rho / self.sigma) * (vT - v0 - self.kappa * self.m * self.dt)
-
-        # s(u): (K,)
-        s = 0.5 * (1.0 - self.rho * self.rho) * self.u2 - 1j * u * (self.rho * self.kappa / self.sigma)
-
-        # Need alpha shape that broadcasts with v0,vT and u:
-        # alpha = 1j*s, shape (K,)
-        alpha = 1j * s  # (K,)
-
-        # Φ(i s(u)) depends on (v0,vT) and u, result shape lead_shape + (K,)
-        # Achieve broadcasting by reshaping v0,vT to lead_shape + (1,)
-        v0e = np.broadcast_to(v0, lead_shape)[..., None]
-        vTe = np.broadcast_to(vT, lead_shape)[..., None]
-        alphae = alpha[None, ...] if lead_shape != () else alpha  # let broadcasting handle scalars
-
-        phi_I = _phi_intvar_cond_endpoints(alphae, v0e, vTe, self.dt, self.kappa, self.m, self.sigma)
-
-        # exp(i u mu_const): lead_shape + (K,)
-        phase = np.exp(1j * mu_const[..., None] * u[None, :])
-
-        return phase * phi_I  # lead_shape + (K,)
-
-    def pdf_r(self, r, v0, vT):
-        """
-        Vectorized in r (r can be scalar or array). v0,vT fixed scalars.
-        Returns shape of r.
-        """
-        r = np.asarray(r, dtype=np.float64)
-        psi = self.cf_dY_cond_endpoints(float(v0), float(vT))  # (K,)
-        # E: shape r + (K,)
-        E = np.exp(-1j * r[..., None] * self.u[None, :])
-        val = np.real((E * psi[None, :]) @ self.w) / np.pi
-        return val.reshape(r.shape)
-
-    def pdf_pairs(self, r, v0, vT):
-        """
-        Vectorized in pairs (v0,vT arrays of same/broadcastable shape), r scalar.
-        Returns broadcast(v0,vT) shape.
-        """
-        r = float(r)
-        psi = self.cf_dY_cond_endpoints(v0, vT)  # lead_shape + (K,)
-        phase = np.exp(-1j * self.u * r)         # (K,)
-        val = np.real(np.sum(psi * (self.w * phase)[None, ...], axis=-1)) / np.pi
-        return val
-
-    def pdf_matrix(self, r_vec, v0_vec, vT_vec, chunk_r=None):
-        """
-        Full vectorization: returns a matrix of shape (P, R) where
-          P = len(v0_vec) = len(vT_vec)
-          R = len(r_vec)
-
-        Uses BLAS matmul:
-          K = (psi * w)  -> (P,K)
-          E = exp(-i u r)-> (K,R)
-          out = Re(K @ E)/pi
-
-        chunk_r: optional int; if set, processes r in chunks to limit memory.
-        """
-        r_vec = np.asarray(r_vec, dtype=np.float64).ravel()
-        v0_vec = np.asarray(v0_vec, dtype=np.float64).ravel()
-        vT_vec = np.asarray(vT_vec, dtype=np.float64).ravel()
-        assert v0_vec.shape == vT_vec.shape, "v0_vec and vT_vec must have same shape"
-
-        P = v0_vec.size
-        R = r_vec.size
-        K = self.M + 1
-
-        psi = self.cf_dY_cond_endpoints(v0_vec, vT_vec)  # (P,K)
-        Kw = psi * self.w[None, :]                       # (P,K)
-
-        if chunk_r is None or chunk_r >= R:
-            E = np.exp(-1j * self.u[:, None] * r_vec[None, :])  # (K,R)
-            out = np.real(Kw @ E) / np.pi
-            return out
-
-        out = np.empty((P, R), dtype=np.float64)
-        for start in range(0, R, chunk_r):
-            stop = min(R, start + chunk_r)
-            r_chunk = r_vec[start:stop]
-            E = np.exp(-1j * self.u[:, None] * r_chunk[None, :])  # (K,chunk)
-            out[:, start:stop] = np.real(Kw @ E) / np.pi
-        return out
-
-
-class BridgeReturnPDF:
-    """
     Exact (up to 1D quadrature) p(r_n | v_{n-1}=a, v_n=b) using Broadie–Kaya CF,
     optimized for repeated evaluations at observed r_n.
 
@@ -399,24 +205,7 @@ class BridgeReturnPDF:
       pdf(n, a, b) = (1/pi) * Re( sum_k  Psi_k(a,b) * E_{k,n} )
     """
 
-    def __init__(
-        self,
-        r_seq,
-        dt,
-        kappa,
-        m,
-        sigma,
-        rho,
-        *,
-        U=200.0,
-        K=1024,                 # number of u-intervals; points = K+1
-        p_min=1e-10,
-        p_max=5.0,
-        P=512,                  # number of p-grid points
-        p_grid=None,            # optional explicit p-grid
-        interp_logp=True,       # interpolate R in log(p) for stability
-        complex_dtype=np.complex64,
-    ):
+    def __init__(self, r_seq, dt, kappa, m, sigma, rho, *, U=200.0, K=1024, p_min=1e-10, p_max=5.0, P=512, p_grid=None, interp_logp=True):
         self.r_seq = np.asarray(r_seq, dtype=np.float64)
         self.T = self.r_seq.size
 
@@ -430,7 +219,7 @@ class BridgeReturnPDF:
         self.K = int(K)
 
         # --- u-grid [0, U] with K intervals -> K+1 points
-        u = np.linspace(0.0, self.U, self.K + 1, dtype=np.float64)
+        u = np.linspace(0.0, self.U, self.K + 1)
         du = u[1] - u[0]
 
         w = np.full_like(u, du, dtype=np.float64)
@@ -444,7 +233,7 @@ class BridgeReturnPDF:
         # --- precompute E_{k,n} = w_k * exp(-i u_k r_n)
         # shape: (Ku, T)
         # store complex64 by default to reduce RAM
-        self.E = (w[:, None] * np.exp(-1j * u[:, None] * self.r_seq[None, :])).astype(complex_dtype)
+        self.E = w[:, None] * np.exp(-1j * u[:, None] * self.r_seq[None, :])
 
         # --- CIR degrees-of-freedom parameter for BK Bessel order
         df = 4.0 * self.kappa * self.m / (self.sigma * self.sigma)
@@ -457,9 +246,9 @@ class BridgeReturnPDF:
             if p_max <= p_min:
                 raise ValueError("p_max must be > p_min")
             # geometric grid is usually better than linear for variance scales
-            self.p_grid = np.geomspace(p_min, p_max, P).astype(np.float64)
+            self.p_grid = np.geomspace(p_min, p_max, P)
         else:
-            self.p_grid = np.asarray(p_grid, dtype=np.float64)
+            self.p_grid = np.asarray(p_grid)
             if np.any(self.p_grid <= 0):
                 raise ValueError("p_grid must be strictly positive")
             if np.any(np.diff(self.p_grid) <= 0):
@@ -470,16 +259,17 @@ class BridgeReturnPDF:
         self.logp_grid = np.log(self.p_grid)
 
         # --- precompute u-dependent BK ingredients at alpha(u) = i*s(u)
-        self._precompute_u_dependent_terms(complex_dtype=complex_dtype)
+        self._precompute_u_dependent_terms()
 
         # --- precompute R_{k,j} on (u_k, p_j)
-        self._precompute_R_table(complex_dtype=complex_dtype)
+        self._precompute_R_table()
 
-    # -----------------------------
-    # Precomputation helpers
-    # -----------------------------
+        if interp_logp:
+            self.spline = CubicSpline(self.logp_grid, self.R_table, axis=-1)
+        else:
+            self.spline = CubicSpline(self.p_grid, self.R_table, axis=-1)
 
-    def _precompute_u_dependent_terms(self, complex_dtype=np.complex64):
+    def _precompute_u_dependent_terms(self):
         """
         Precompute arrays over u-grid that do NOT depend on endpoints (a,b),
         evaluated at alpha(u) = i*s(u), where
@@ -522,12 +312,12 @@ class BridgeReturnPDF:
         c_den = (4.0 * kappa * np.exp(-0.5 * kappa * dt)) / ((sigma * sigma) * one_minus_ek)  # real positive
 
         self.gamma = gamma.astype(np.complex128)
-        self.pref = pref.astype(complex_dtype)
-        self.lam = lam.astype(complex_dtype)
-        self.c_num = c_num.astype(np.complex128)  # keep high precision for building z_num
-        self.c_den = float(np.real(c_den))
+        self.pref = pref
+        self.lam = lam
+        self.c_num = c_num
+        self.c_den = np.real(c_den)
 
-    def _precompute_R_table(self, complex_dtype=np.complex64):
+    def _precompute_R_table(self):
         """
         Precompute R(u_k, p_j) = I_nu(z_num(u_k,p_j)) / I_nu(z_den(p_j)),
         where
@@ -538,13 +328,13 @@ class BridgeReturnPDF:
         nu = self.nu
 
         # z_den depends only on p (real)
-        z_den = (self.c_den * p).astype(np.float64)  # (P,)
+        z_den = self.c_den * p  # (P,)
 
         # Stable denominator using ive: ive(nu,z) = exp(-z) I_nu(z)
         den_scaled = ive(nu, z_den)  # (P,), real for real positive z_den
 
         # z_num is (Ku,P)
-        z_num = (self.c_num[:, None] * p[None, :]).astype(np.complex128)  # (Ku,P)
+        z_num = self.c_num[:, None] * p[None, :] # (Ku,P)
 
         # Numerator Bessel: I_nu(z_num), complex
         num = iv(nu, z_num)
@@ -562,11 +352,7 @@ class BridgeReturnPDF:
         # At u=0: alpha=0 -> gamma=kappa -> z_num=z_den -> ratio=1.
         ratio[0, :] = 1.0 + 0.0j
 
-        self.R_table = ratio.astype(complex_dtype)  # (Ku,P)
-
-    # -----------------------------
-    # Runtime evaluation
-    # -----------------------------
+        self.R_table = ratio # (Ku,P)
 
     def _interp_R(self, p_val):
         """
@@ -574,7 +360,6 @@ class BridgeReturnPDF:
         Uses linear interpolation in log(p) by default.
         """
         # Clamp p to grid range to avoid extrapolation blowups
-        p_val = float(p_val)
         if p_val <= self.p_grid[0]:
             return self.R_table[:, 0]
         if p_val >= self.p_grid[-1]:
@@ -605,70 +390,33 @@ class BridgeReturnPDF:
           n: integer index into the observed r-sequence (0 <= n < T)
           a: v_{n-1} > 0
           b: v_n > 0
-
-        Returns:
-          float density value (can be tiny; consider using log outside if needed).
         """
         n = int(n)
-        if n < 0 or n >= self.T:
-            raise IndexError(f"n must be in [0, {self.T-1}]")
-
-        a = float(a)
-        b = float(b)
-        if a <= 0.0 or b <= 0.0:
-            # If you want to support 0 exactly, you'd need careful limiting for Bessel terms.
-            return 0.0
-
         s = a + b
         d = b - a
         p = np.sqrt(a * b)
 
-        # interpolate R(u_k, p)
-        Rk = self._interp_R(p)  # (Ku,)
-
-        # phase from ΔY endpoint term:
-        # mu_const = (rho/sigma) * ( (b-a) - kappa*m*dt )
+        Rk = self._interp_R(p)
         mu_const = (self.rho / self.sigma) * (d - self.kappa * self.m * self.dt)
         phase = np.exp(1j * self.u * mu_const)  # (Ku,), complex128
 
-        # Ψ(u_k | a,b) = exp(i u mu_const) * Φ(alpha(u)) with Φ decomposed as:
-        # Φ = pref_k * exp(lam_k * (a+b)) * R(u_k,p)
-        psi = (phase.astype(self.pref.dtype) * self.pref * np.exp(self.lam * s) * Rk)  # (Ku,)
-
-        # p(r_n | a,b) ≈ (1/pi) * Re( sum_k psi_k * E_{k,n} )
-        val = np.real(np.vdot(psi, self.E[:, n])) / np.pi  # vdot conjugates first arg; we don't want conjugation
-
-        # Use dot without conjugation:
-        # val = np.real(np.dot(psi, self.E[:, n])) / np.pi
-        # We'll do it explicitly:
-        val = np.real(np.dot(psi, self.E[:, n])) / np.pi
-
-        return float(val)
-
-    def pdf_pairs(self, n, a_vec, b_vec):
-        """
-        Vectorized over pairs (a_i, b_i) for fixed n.
-        This still interpolates R per pair, so it loops over pairs but keeps u-ops vectorized.
-        Useful if you need batches.
-        """
-        n = int(n)
-        a_vec = np.asarray(a_vec, dtype=np.float64).ravel()
-        b_vec = np.asarray(b_vec, dtype=np.float64).ravel()
-        if a_vec.shape != b_vec.shape:
-            raise ValueError("a_vec and b_vec must have the same shape")
-
-        out = np.empty_like(a_vec, dtype=np.float64)
-        for i, (a, b) in enumerate(zip(a_vec, b_vec)):
-            out[i] = self.pdf(n, float(a), float(b))
-        return out.reshape(a_vec.shape)
+        explam = np.exp(self.lam * s)
+        psi = phase * self.pref * explam * Rk
+        E_n = self.E[:, n]
+        return np.real(np.dot(psi, E_n)) / np.pi
 
 
 
-eng = BridgeReturnPDF(r_seq=np.linspace(-1, 1, 1000), dt=1, kappa=1, m=0.3**2, sigma=0.3, rho=-0.5, U=200, K=4096, P=2000)
+eng = BridgeReturnPDF(r_seq=np.linspace(-1, 1, 2000), dt=1, kappa=1, m=0.3**2, sigma=0.3, rho=-0.5, U=200, K=4096, P=2500)
 
 tic = time()
-f = eng.pdf_pairs(749, np.linspace(0.3**2, 0.4**2, 10000), np.linspace(0.4**2, 0.5**2, 10000))
+f = [eng.pdf(749, 0.3**2, 0.4**2) for i in range(10000)]
 toc = time()
-print(toc - tic, f.shape)
+print(toc - tic)
+
+tic = time()
+f = eng.pdf_pairs2(749, np.linspace(0.3**2, 0.4**2, 10000), np.linspace(0.4**2, 0.5**2, 10000))
+toc = time()
+print(toc - tic, f)
 
 bridge_return_pdf_quad(0.49949949949949946, 0.3**2, 0.4**2, dt=1, kappa=1, m=0.3**2, sigma=0.3, rho=-0.5)
