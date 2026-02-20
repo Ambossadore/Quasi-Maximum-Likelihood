@@ -11,7 +11,7 @@ plt.rcParams.update({
 })
 
 
-def particle_filter_heston(N, param, dt, Delta_Y, verbose=1):
+def particle_filter_heston(N, param, dt, Delta_Y, verbose=1, return_vw=False):
 
     kappa, m, sigma, rho = param
     K = np.size(Delta_Y)
@@ -21,6 +21,9 @@ def particle_filter_heston(N, param, dt, Delta_Y, verbose=1):
     v_filtered, v_cond_variance = np.zeros(K), np.zeros(K)
     v_filtered[0] = np.mean(v_particles)
     v_cond_variance[0] = np.var(v_particles)
+    if return_vw:
+        particles_list = [v_particles]
+        weights_list = [np.ones(N) / N]
 
     t = trange(1, K, desc='Computing particle filter') if verbose else range(1, K)
     for i in t:
@@ -51,8 +54,14 @@ def particle_filter_heston(N, param, dt, Delta_Y, verbose=1):
         v_particles = v_particles + drift + diffusion_observed + diffusion_unobserved
         v_filtered[i] = np.sum(v_particles * weights)
         v_cond_variance[i] = np.sum(v_particles**2 * weights) - v_filtered[i]**2
+        if return_vw:
+            particles_list.append(v_particles)
+            weights_list.append(weights)
 
-    return v_filtered, v_cond_variance
+    if return_vw:
+        return v_filtered, v_cond_variance, np.array(particles_list), np.array(weights_list)
+    else:
+        return v_filtered, v_cond_variance
 
 
 def resample(weights):
