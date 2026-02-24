@@ -1,5 +1,7 @@
+from main import *
 import numpy as np
 from scipy.special import iv, ive
+from scipy.stats import truncnorm
 from numba import njit, prange
 from time import time
 from tqdm import trange
@@ -47,7 +49,7 @@ def _log_p_dYn_given_vnm1_vn(n, vnm1, vn, dt, kappa, m, sigma, rho, u, E, pref, 
     hdiag = np.empty((M, 4), dtype=np.float64)
 
     # Same observed return for all pairs in this batch
-    Erow = E[n]   # shape (Ku,), contiguous if E is C-order and shape (T,Ku)
+    Erow = E[n]  # shape (Ku,), contiguous if E is C-order and shape (T,Ku)
 
     for i in prange(M):
         a = vnm1[i]
@@ -67,8 +69,14 @@ def _log_p_dYn_given_vnm1_vn(n, vnm1, vn, dt, kappa, m, sigma, rho, u, E, pref, 
         if a <= 0.0 or b <= 0.0:
             ok[i] = 0
             logp[i] = logp_i
-            grad[i, 0] = g0; grad[i, 1] = g1; grad[i, 2] = g2; grad[i, 3] = g3
-            hdiag[i, 0] = h0; hdiag[i, 1] = h1; hdiag[i, 2] = h2; hdiag[i, 3] = h3
+            grad[i, 0] = g0
+            grad[i, 1] = g1
+            grad[i, 2] = g2
+            grad[i, 3] = g3
+            hdiag[i, 0] = h0
+            hdiag[i, 1] = h1
+            hdiag[i, 2] = h2
+            hdiag[i, 3] = h3
             continue
 
         # endpoint combinations
@@ -103,10 +111,10 @@ def _log_p_dYn_given_vnm1_vn(n, vnm1, vn, dt, kappa, m, sigma, rho, u, E, pref, 
         c = d - kappa * m * dt
         mu_const = (rho / sigma) * c
 
-        dmu0 = -(rho / sigma) * m * dt              # d/dkappa
-        dmu1 = -(rho / sigma) * kappa * dt          # d/dm
-        dmu2 = -(rho / (sigma * sigma)) * c         # d/dsigma
-        dmu3 = c / sigma                            # d/drho
+        dmu0 = -(rho / sigma) * m * dt  # d/dkappa
+        dmu1 = -(rho / sigma) * kappa * dt  # d/dm
+        dmu2 = -(rho / (sigma * sigma)) * c  # d/dsigma
+        dmu3 = c / sigma  # d/drho
 
         d2mu0 = 0.0
         d2mu1 = 0.0
@@ -116,8 +124,14 @@ def _log_p_dYn_given_vnm1_vn(n, vnm1, vn, dt, kappa, m, sigma, rho, u, E, pref, 
         # accumulators for Re(S0), Re(S1_l), Re(S2_l)
         S0_re = 0.0
 
-        S1_0 = 0.0; S1_1 = 0.0; S1_2 = 0.0; S1_3 = 0.0
-        S2_0 = 0.0; S2_1 = 0.0; S2_2 = 0.0; S2_3 = 0.0
+        S1_0 = 0.0
+        S1_1 = 0.0
+        S1_2 = 0.0
+        S1_3 = 0.0
+        S2_0 = 0.0
+        S2_1 = 0.0
+        S2_2 = 0.0
+        S2_3 = 0.0
 
         for k in range(Ku):
             uk = u[k]
@@ -182,8 +196,14 @@ def _log_p_dYn_given_vnm1_vn(n, vnm1, vn, dt, kappa, m, sigma, rho, u, E, pref, 
             h3 = S2_3 / S0_re - g3 * g3
 
         logp[i] = logp_i
-        grad[i, 0] = g0; grad[i, 1] = g1; grad[i, 2] = g2; grad[i, 3] = g3
-        hdiag[i, 0] = h0; hdiag[i, 1] = h1; hdiag[i, 2] = h2; hdiag[i, 3] = h3
+        grad[i, 0] = g0
+        grad[i, 1] = g1
+        grad[i, 2] = g2
+        grad[i, 3] = g3
+        hdiag[i, 0] = h0
+        hdiag[i, 1] = h1
+        hdiag[i, 2] = h2
+        hdiag[i, 3] = h3
 
     return ok, logp, grad, hdiag
 
@@ -195,7 +215,6 @@ def _log_p_vn_given_vnm1(vn, vnm1, dt, kappa, m, sigma):
     for the SDE
         dX_t = kappa (m - X_t) dt + sigma sqrt(X_t) dW_t
     """
-    vn = np.maximum(vn, 0.)
     ek = np.exp(-kappa * dt)
     one_minus_ek = -np.expm1(-kappa * dt)  # 1 - e^{-kappa dt}
     c = 2.0 * kappa / (sigma ** 2 * one_minus_ek)
@@ -207,7 +226,7 @@ def _log_p_vn_given_vnm1(vn, vnm1, dt, kappa, m, sigma):
 
     # log I_q(z) using scaled Bessel ive: ive(q,z) = exp(-z) I_q(z) for z>0
     # Hence log I_q(z) = log(ive(q,z)) + z
-    ive_q_z = ive(q, z)   # TODO: Stopped here
+    ive_q_z = ive(q, z)
     logI = np.log(ive_q_z) + z
 
     # Continuous-part log-density
@@ -224,25 +243,29 @@ class Proposal:
         self.rng = rng if rng is not None else np.random.default_rng()
 
     def log_q_dYn_given_vnm1(self, dYn, vnm1):
-        integrand = lambda u: np.real(np.exp(-1j * u * dYn) * _heston_char(u, self.dt, vnm1, self.kappa, self.m, self.sigma, self.rho))
-        return np.log(quad_vec(integrand, 0, np.inf)[0]) - np.log(np.pi)
+        """Gaussian from Euler discretization"""
+        return -0.5 * (np.log(2 * np.pi) + np.log(vnm1 * self.dt) + dYn ** 2 / (vnm1 * self.dt))
 
     def log_q_vn_given_vnm1_dYn(self, vn, vnm1, dYn):
+        """Truncated Gaussian from Euler discretization"""
         mu_q = vnm1 + self.kappa * (self.m - vnm1) * self.dt + self.sigma * self.rho * dYn
-        var_q = self.sigma ** 2 * (1.0 - self.rho ** 2) * vnm1 * self.dt
-        return -0.5 * (np.log(2 * np.pi) + np.log(var_q) + (vn - mu_q) ** 2 / var_q)
+        std_q = self.sigma * np.sqrt((1.0 - self.rho ** 2) * vnm1 * self.dt)
+        trunc = truncnorm(a=-mu_q / std_q, b=np.inf, loc=mu_q, scale=std_q)
+        return trunc.logpdf(vn)
 
     def sample_q_vn_given_vnm1_dYn(self, vnm1, dYn):
+        """Truncated Gaussian from Euler discretization"""
         mu_q = vnm1 + self.kappa * (self.m - vnm1) * self.dt + self.sigma * self.rho * dYn
-        var_q = self.sigma ** 2 * (1.0 - self.rho ** 2) * vnm1 * self.dt
-        return mu_q + np.sqrt(var_q) * self.rng.standard_normal(size=np.shape(mu_q))
+        std_q = self.sigma * np.sqrt((1.0 - self.rho ** 2) * vnm1 * self.dt)
+        trunc = truncnorm(a=-mu_q / std_q, b=np.inf, loc=mu_q, scale=std_q)
+        return trunc.rvs(random_state=self.rng)
 
 
 class HestonTransition:
     def __init__(self, dY_seq, dt, kappa, m, sigma, rho, *, U=200.0, K=4096, p_min=1e-10, p_max=5.0, P=2048, p_grid=None, fd_eps=1e-4):
         # --- observed returns
-        self.r_seq = np.asarray(dY_seq, dtype=np.float64)
-        self.T = self.r_seq.size
+        self.dY_seq = np.asarray(dY_seq, dtype=np.float64)
+        self.T = self.dY_seq.size
 
         self.dt = float(dt)
         self.kappa = float(kappa)
@@ -266,7 +289,7 @@ class HestonTransition:
         self.u2 = u * u
 
         # --- precompute E_{k,n} = w_k * exp(-i u_k r_n), shape (T, Ku)
-        self.E = (w[None, :] * np.exp(-self.iu[None, :] * self.r_seq[:, None]))
+        self.E = np.ascontiguousarray(w[None, :] * np.exp(-self.iu[None, :] * self.dY_seq[:, None]))
 
         # --- p-grid (for p = sqrt(a*b))
         if p_grid is None:
@@ -297,12 +320,12 @@ class HestonTransition:
         # --- base u-dependent terms + base R-table
         base_terms = self._compute_u_terms(self.kappa, self.m, self.sigma, self.rho)
         self.nu = base_terms["nu"]
-        self.pref = base_terms["pref"]    # (Ku,)
-        self.lam = base_terms["lam"]      # (Ku,)
+        self.pref = base_terms["pref"]  # (Ku,)
+        self.lam = base_terms["lam"]  # (Ku,)
         self.R_table = self._compute_R_table(base_terms)  # (Ku,P)
 
         # --- finite-difference steps for theta-derivatives
-        self.fd_eps = fd_eps * np.array([self.kappa, self.m, self.sigma, np.abs(self.rho)])
+        self.fd_eps = fd_eps * np.maximum([self.kappa, self.m, self.sigma, np.abs(self.rho)], 1.)
 
         # --- precompute derivative tables wrt theta = (kappa, m, sigma, rho)
         self._precompute_theta_derivative_tables()
@@ -468,15 +491,15 @@ class HestonTransition:
         Precompute R(u_k,p_j) = I_nu(z_num)/I_nu(z_den) on (u,p)-grid.
         """
         nu = terms["nu"]
-        c_num = terms["c_num"]     # (Ku,)
-        c_den = terms["c_den"]     # scalar
+        c_num = terms["c_num"]  # (Ku,)
+        c_den = terms["c_den"]  # scalar
 
         # z_den real positive
         z_den = c_den * self.p_grid
-        den_scaled = ive(nu, z_den)                # exp(-z_den) I_nu(z_den)
+        den_scaled = ive(nu, z_den)  # exp(-z_den) I_nu(z_den)
 
         # z_num complex
-        z_num = c_num[:, None] * self.p_grid[None, :]        # (Ku,P)
+        z_num = c_num[:, None] * self.p_grid[None, :]  # (Ku,P)
         num = iv(nu, z_num)
 
         # Stable ratio
@@ -567,298 +590,66 @@ class HestonTransition:
         self.d2logR_table = d2logR_table
 
 
-#-----------------------------#
-#### Algorithm 1 of PDS #######
-#-----------------------------#
+if __name__ == '__main__':
+    init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.])
+    model1 = HestonModel(first_observed=1, init=init, dt=1., signature='1[1]_2d[1]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), warn=False)
+    model1.generate_observations(t_max=2000, inter_steps=250, seed=20, verbose=1)
 
-dY_seq = ...
-kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
-dt = 1.
-rng = np.random.default_rng()
-K = len(dY_seq)
-proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
-transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+    #-----------------------------#
+    #### Algorithm 1 of PDS #######
+    #-----------------------------#
 
-# Warm-up compile
-_ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+    dY_seq = model1.observations[1:, 1]
+    kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
+    dt = 1.
+    N = 1000
+    rng = np.random.default_rng(seed=20)
+    K = len(dY_seq)
+    proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
+    transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
 
-# Initial particles
-vnm1 = 0.3**2
-alpha_nm1 = 0
-beta_nm1 = 0
-logweights = np.repeat(-np.log(N), N)
+    # Warm-up compile
+    _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
 
-S = np.zeros((K, 4))
-Sigma_diag = np.zeros((K, 4))
+    # Initial particles
+    vnm1 = np.repeat(0.3 ** 2, N)
+    alpha_nm1 = np.zeros((N, 4))
+    beta_nm1 = np.zeros((N, 4))
+    logweights = np.repeat(-np.log(N), N)
 
-for n in range(len(dY_seq)):
-    resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
-    resample_weights = np.exp(log_weights)
-    resample_weights = resample_weights / resample_weights.sum()
-    resample_indices = _systematic_resample(resample_weights, rng)
-    vnm1, alpha_nm1, beta_nm1 = vnm1[resample_indices], alpha_nm1[resample_indices], beta_nm1[resample_indices]
+    S = np.zeros((K, 4))
+    Sigma_diag = np.zeros((K, 4))
 
-    vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
-    logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
-    logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
-    weights = np.exp(logweights)
-    weights = weights / weights.sum()
-    alpha_n = alpha_nm1 + deriv
-    beta_n = beta_nm1 + hess
-    S[n] = weights @ alpha_n
-    Sigma_diag[n] = S[n] ** 2 - weights @ (alpha_n ** 2 + beta_n)
+    for n in trange(K, desc='Running particle filter'):
+        resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+        resample_weights = np.exp(resample_logweights - resample_logweights.max())
+        resample_weights = resample_weights / resample_weights.sum()
+        resample_indices = _systematic_resample(resample_weights, rng)
+        vnm1, alpha_nm1, beta_nm1 = vnm1[resample_indices], alpha_nm1[resample_indices], beta_nm1[resample_indices]
 
-    v_nm1, alpha_nm1, beta_nm1 = v_n, alpha_n, beta_n
+        vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
+        logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
+        logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+        weights = np.exp(logweights - logweights.max())
+        weights = weights / weights.sum()
+        alpha_n = alpha_nm1 + deriv
+        beta_n = beta_nm1 + hess
+        S[n] = weights @ alpha_n
+        Sigma_diag[n] = S[n] ** 2 - weights @ (alpha_n ** 2 + beta_n)
 
+        vnm1, alpha_nm1, beta_nm1 = vn, alpha_n, beta_n
 
+    print("finished")
 
-
-
-# def pds_algorithm1_diag(
-#     r_seq,
-#     N,
-#     *,
-#     # Initial particles:
-#     # either provide x0_particles directly, or provide sample_x0 callback
-#     x0_particles=None,
-#     sample_x0=None,
-#     # Proposal q(x_n | r_n, x_{n-1}) sampler
-#     sample_qx,
-#     # Callbacks returning (log, grad, hess_diag), all wrt theta
-#     # Shapes:
-#     #   log_*:      (M,)
-#     #   grad_*:     (M, d)
-#     #   hessdiag_*: (M, d)
-#     log_h_and_derivs,
-#     log_qx_and_derivs,
-#     log_qr_and_derivs,
-#     # Optional: if proposal derivatives are ignored, set these to False
-#     include_qx_derivs=True,
-#     include_qr_derivs=True,
-#     # RNG
-#     rng=None,
-#     # Return extra internals
-#     return_particle_state=False,
-# ):
-#     """
-#     PDS Algorithm 1 (path-space, O(N)) adapted to joint density h_theta.
-#
-#     Model increment target density:
-#         h_theta(x_n, r_n | x_{n-1})
-#
-#     Proposal/auxiliary terms:
-#         q_theta(x_n | r_n, x_{n-1})
-#         q_theta(r_n | x_{n-1})
-#
-#     Increment log-weight (and complete-data score/Hessian increment):
-#         ell_n = log h - log qx - log qr
-#
-#     The algorithm computes:
-#       - particle filter / APF approximation
-#       - score estimate S_n = E[ A_n | r_{1:n} ] approx sum_i w_n^i A_n^i
-#       - diagonal observed information estimate
-#             I_n,diag = S_n^2 - E[ B_n + A_n^2 | r_{1:n} ]_diag
-#         where
-#             A_n = sum_t ∇ log increment_t
-#             B_n = sum_t diag(∇^2 log increment_t)
-#
-#     Parameters
-#     ----------
-#     r_seq : array-like, shape (T,)
-#         Observed returns r_1,...,r_T.
-#     N : int
-#         Number of particles.
-#     x0_particles : array-like, optional
-#         Initial latent particles x_0^{(i)}. If None, `sample_x0` must be provided.
-#     sample_x0 : callable, optional
-#         sample_x0(N, rng) -> array shape (N,)
-#     sample_qx : callable
-#         sample_qx(x_prev, r_n, rng) -> x_new, shape (N,)
-#     log_h_and_derivs : callable
-#         log_h_and_derivs(x_new, r_n, x_prev) -> (logh, dlogh, d2logh_diag)
-#     log_qx_and_derivs : callable
-#         log_qx_and_derivs(x_new, x_prev, r_n) -> (logqx, dlogqx, d2logqx_diag)
-#     log_qr_and_derivs : callable
-#         log_qr_and_derivs(r_n, x_prev) -> (logqr, dlogqr, d2logqr_diag)
-#
-#     Returns
-#     -------
-#     out : dict
-#         Keys:
-#           - "score":    array, shape (T, d)
-#           - "info_diag": array, shape (T, d)
-#           - "weights":  final weights, shape (N,)
-#           - "x_particles": final particles, shape (N,)
-#           - "A_particles": final path score accumulators, shape (N,d)
-#           - "Bdiag_particles": final path Hessian-diag accumulators, shape (N,d)
-#         plus, if return_particle_state=False, only the first two are guaranteed.
-#     """
-#     if rng is None:
-#         rng = np.random.default_rng()
-#
-#     r_seq = np.asarray(r_seq, dtype=np.float64)
-#     T = r_seq.size
-#     if T == 0:
-#         raise ValueError("r_seq must be non-empty")
-#     if N <= 0:
-#         raise ValueError("N must be positive")
-#
-#     # ----- Initialize x_0 particles
-#     if x0_particles is None:
-#         if sample_x0 is None:
-#             raise ValueError("Provide either x0_particles or sample_x0.")
-#         x_prev = np.asarray(sample_x0(N, rng), dtype=np.float64)
-#     else:
-#         x_prev = np.asarray(x0_particles, dtype=np.float64)
-#         if x_prev.shape != (N,):
-#             raise ValueError(f"x0_particles must have shape ({N},)")
-#
-#     # Uniform initial weights
-#     w_prev = np.full(N, 1.0 / N, dtype=np.float64)
-#
-#     # Need parameter dimension d from a probe call on the first observation
-#     # (using x_prev as both x_new/x_prev just to infer shape; values don't matter)
-#     r0 = float(r_seq[0])
-#     logh0, dlogh0, d2h0 = log_h_and_derivs(x_prev, r0, x_prev)
-#     dlogh0 = np.asarray(dlogh0)
-#     d2h0 = np.asarray(d2h0)
-#
-#     if dlogh0.ndim != 2 or dlogh0.shape[0] != N:
-#         raise ValueError("log_h_and_derivs must return grad shape (N,d)")
-#     if d2h0.shape != dlogh0.shape:
-#         raise ValueError("log_h_and_derivs must return hess_diag shape (N,d)")
-#
-#     d = dlogh0.shape[1]
-#
-#     # Path accumulators (complete-data score and diagonal Hessian sums)
-#     A_prev = np.zeros((N, d), dtype=np.float64)      # A_n^i
-#     Bdiag_prev = np.zeros((N, d), dtype=np.float64)  # B_n^i
-#
-#     # Output trajectories
-#     score_hist = np.empty((T, d), dtype=np.float64)
-#     info_diag_hist = np.empty((T, d), dtype=np.float64)
-#
-#     # ----- Main loop over observations r_1,...,r_T
-#     for t in range(T):
-#         r_n = float(r_seq[t])
-#
-#         # 1) First-stage weights ~ w_{n-1}^i * q(r_n | x_{n-1}^i)
-#         logqr_prev, dlogqr_prev, d2logqr_prev = log_qr_and_derivs(r_n, x_prev)
-#
-#         logqr_prev = np.asarray(logqr_prev, dtype=np.float64)
-#         dlogqr_prev = np.asarray(dlogqr_prev, dtype=np.float64)
-#         d2logqr_prev = np.asarray(d2logqr_prev, dtype=np.float64)
-#
-#         if logqr_prev.shape != (N,):
-#             raise ValueError("log_qr_and_derivs must return logqr shape (N,)")
-#         if dlogqr_prev.shape != (N, d) or d2logqr_prev.shape != (N, d):
-#             raise ValueError("log_qr_and_derivs grad/hess_diag must have shape (N,d)")
-#
-#         # log w_{n-1} may contain zeros -> use -inf safely
-#         logw_prev = np.where(w_prev > 0.0, np.log(w_prev), -np.inf)
-#         log_first_stage = logw_prev + logqr_prev
-#         w_first, _ = _normalize_logweights(log_first_stage)
-#
-#         # 2) Resample ancestors according to first-stage weights
-#         anc = _systematic_resample(w_first, rng)
-#
-#         x_anc = x_prev[anc]
-#         A_anc = A_prev[anc]
-#         Bdiag_anc = Bdiag_prev[anc]
-#
-#         # Need proposal-qr derivatives at chosen ancestors
-#         logqr_anc = logqr_prev[anc]
-#         dlogqr_anc = dlogqr_prev[anc]
-#         d2logqr_anc = d2logqr_prev[anc]
-#
-#         # 3) Propagate x_n^i ~ q(x_n | r_n, x_{n-1}^{anc_i})
-#         x_new = np.asarray(sample_qx(x_anc, r_n, rng), dtype=np.float64)
-#         if x_new.shape != (N,):
-#             raise ValueError("sample_qx must return shape (N,)")
-#
-#         # 4) Evaluate target and proposal densities and derivatives
-#         logh, dlogh, d2logh = log_h_and_derivs(x_new, r_n, x_anc)
-#         logqx, dlogqx, d2logqx = log_qx_and_derivs(x_new, x_anc, r_n)
-#
-#         logh = np.asarray(logh, dtype=np.float64)
-#         dlogh = np.asarray(dlogh, dtype=np.float64)
-#         d2logh = np.asarray(d2logh, dtype=np.float64)
-#
-#         logqx = np.asarray(logqx, dtype=np.float64)
-#         dlogqx = np.asarray(dlogqx, dtype=np.float64)
-#         d2logqx = np.asarray(d2logqx, dtype=np.float64)
-#
-#         if logh.shape != (N,) or logqx.shape != (N,):
-#             raise ValueError("log_h/log_qx must return shape (N,)")
-#         if dlogh.shape != (N, d) or d2logh.shape != (N, d):
-#             raise ValueError("log_h grad/hess_diag must have shape (N,d)")
-#         if dlogqx.shape != (N, d) or d2logqx.shape != (N, d):
-#             raise ValueError("log_qx grad/hess_diag must have shape (N,d)")
-#
-#         # 5) Increment log-weight and complete-data derivative increments
-#         log_inc = logh - logqx - logqr_anc
-#
-#         if include_qx_derivs:
-#             dlog_inc = dlogh - dlogqx
-#             d2log_inc = d2logh - d2logqx
-#         else:
-#             dlog_inc = dlogh.copy()
-#             d2log_inc = d2logh.copy()
-#
-#         if include_qr_derivs:
-#             dlog_inc -= dlogqr_anc
-#             d2log_inc -= d2logqr_anc
-#
-#         # 6) Path-space recursion (PDS Algorithm 1)
-#         A_new = A_anc + dlog_inc
-#         Bdiag_new = Bdiag_anc + d2log_inc
-#
-#         # 7) Second-stage weights
-#         w_new, _ = _normalize_logweights(log_inc)
-#
-#         # 8) Score and diagonal observed information estimate
-#         # Score: S_n = sum_i w_i A_i
-#         score_n = np.sum(w_new[:, None] * A_new, axis=0)
-#
-#         # Diagonal observed information:
-#         # I_diag = S^2 - E[B_diag + A^2 | y]
-#         # (all operations elementwise in parameter dimension)
-#         exp_term = np.sum(w_new[:, None] * (Bdiag_new + A_new * A_new), axis=0)
-#         info_diag_n = score_n * score_n - exp_term
-#
-#         score_hist[t] = score_n
-#         info_diag_hist[t] = info_diag_n
-#
-#         # 9) Advance
-#         x_prev = x_new
-#         w_prev = w_new
-#         A_prev = A_new
-#         Bdiag_prev = Bdiag_new
-#
-#     out = {
-#         "score": score_hist,
-#         "info_diag": info_diag_hist,
-#     }
-#
-#     if return_particle_state:
-#         out.update({
-#             "weights": w_prev,
-#             "x_particles": x_prev,
-#             "A_particles": A_prev,
-#             "Bdiag_particles": Bdiag_prev,
-#         })
-#
-#     return out
-#
-
-
-eng = HestonTransition(dY_seq=np.linspace(-1, 1, 100), dt=1, kappa=1, m=0.3 ** 2, sigma=0.3, rho=-0.5)
-
-# Warm-up compile (small batch is enough)
-_ = eng.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
-
-tic = time()
-f = eng.log_p_vn_dYn_given_vnm1(74, np.linspace(0.3 ** 2, 0.4 ** 2, 10000), np.linspace(0.4 ** 2, 0.5 ** 2, 10000))
-toc = time()
-print(toc - tic)
-print(f[1].shape)
+    # eng = HestonTransition(dY_seq=np.linspace(-1, 1, 100), dt=1, kappa=1, m=0.3 ** 2, sigma=0.3, rho=-0.5)
+    #
+    # # Warm-up compile (small batch is enough)
+    # _ = eng.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+    #
+    # tic = time()
+    # f = eng.log_p_vn_dYn_given_vnm1(74, np.linspace(0.3**2, 0.4 ** 2, 10000), np.linspace(1e-7, 0.2 ** 2, 10000))
+    # toc = time()
+    # print(toc - tic)
+    # print(f[0])
+    # print(f[1])
+    # print(f[2])
