@@ -593,16 +593,66 @@ class HestonTransition:
 if __name__ == '__main__':
     init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.])
     model1 = HestonModel(first_observed=1, init=init, dt=1., signature='1[1]_2d[1]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), warn=False)
-    model1.generate_observations(t_max=2000, inter_steps=250, seed=20, verbose=1)
+    model1.generate_observations(t_max=10000, inter_steps=250, seed=20, verbose=1)
 
     #-----------------------------#
     #### Algorithm 1 of PDS #######
     #-----------------------------#
 
+    # dY_seq = model1.observations[1:, 1]
+    # kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
+    # dt = 1.
+    # N = 1000
+    # rng = np.random.default_rng(seed=20)
+    # K = len(dY_seq)
+    # proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
+    # transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+    #
+    # # Warm-up compile
+    # _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+    #
+    # # Initial particles
+    # vnm1 = np.repeat(0.3 ** 2, N)
+    # alpha_nm1 = np.zeros((N, 4))
+    # beta_nm1 = np.zeros((N, 4))
+    # logweights = np.repeat(-np.log(N), N)
+    #
+    # S = np.zeros((K, 4))
+    # Sigma_diag = np.zeros((K, 4))
+    #
+    # for n in trange(K, desc='Running particle filter'):
+    #     resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+    #     resample_weights = np.exp(resample_logweights - resample_logweights.max())
+    #     resample_weights = resample_weights / resample_weights.sum()
+    #     resample_indices = _systematic_resample(resample_weights, rng)
+    #     vnm1, alpha_nm1, beta_nm1 = vnm1[resample_indices], alpha_nm1[resample_indices], beta_nm1[resample_indices]
+    #
+    #     vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
+    #     logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
+    #     logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+    #     weights = np.exp(logweights - logweights.max())
+    #     weights = weights / weights.sum()
+    #
+    #     alpha_n = alpha_nm1 + deriv
+    #     beta_n = beta_nm1 + hess
+    #     S[n] = weights @ alpha_n
+    #     Sigma_diag[n] = S[n] ** 2 - weights @ (alpha_n ** 2 + beta_n)
+    #
+    #     vnm1, alpha_nm1, beta_nm1 = vn, alpha_n, beta_n
+    #
+    # print("finished")
+
+
+    #-----------------------------#
+    #### Algorithm 2 of NFM #######
+    #-----------------------------#
+
     dY_seq = model1.observations[1:, 1]
     kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
     dt = 1.
-    N = 1000
+    N = 10000
+    lamb = 0.99
+    h2 = 1 - lamb ** 2
     rng = np.random.default_rng(seed=20)
     K = len(dY_seq)
     proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
@@ -613,33 +663,51 @@ if __name__ == '__main__':
 
     # Initial particles
     vnm1 = np.repeat(0.3 ** 2, N)
-    alpha_nm1 = np.zeros((N, 4))
-    beta_nm1 = np.zeros((N, 4))
+    m_nm1 = np.zeros((N, 4))
+    n_nm1 = np.zeros((N, 4))
     logweights = np.repeat(-np.log(N), N)
+    weights = np.repeat(1 / N, N)
 
-    S = np.zeros((K, 4))
-    Sigma_diag = np.zeros((K, 4))
+    V_n = np.zeros(4)
+    B_nm1 = np.zeros(4)
+
+    S = np.zeros((K + 1, 4))
+    I_diag = np.zeros((K + 1, 4))
 
     for n in trange(K, desc='Running particle filter'):
+        V_n += weights @ ((m_nm1 - S[n]) ** 2)
+
         resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
         resample_weights = np.exp(resample_logweights - resample_logweights.max())
         resample_weights = resample_weights / resample_weights.sum()
         resample_indices = _systematic_resample(resample_weights, rng)
-        vnm1, alpha_nm1, beta_nm1 = vnm1[resample_indices], alpha_nm1[resample_indices], beta_nm1[resample_indices]
+        vnm1, m_nm1, n_nm1 = vnm1[resample_indices], m_nm1[resample_indices], n_nm1[resample_indices]
 
         vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
         logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
         logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
         weights = np.exp(logweights - logweights.max())
         weights = weights / weights.sum()
-        alpha_n = alpha_nm1 + deriv
-        beta_n = beta_nm1 + hess
-        S[n] = weights @ alpha_n
-        Sigma_diag[n] = S[n] ** 2 - weights @ (alpha_n ** 2 + beta_n)
 
-        vnm1, alpha_nm1, beta_nm1 = vn, alpha_n, beta_n
+        m_n = lamb * m_nm1 + (1 - lamb) * S[n] + deriv
+        n_n = lamb * n_nm1 + (1 - lamb) * B_nm1 + hess
+
+        S[n + 1] = weights @ m_n
+        I_diag[n + 1] = S[n + 1] ** 2 - weights @ (m_n ** 2 + n_n) - h2 * V_n
+
+        B_nm1 = weights @ n_n
+        vnm1, m_nm1, n_nm1 = vn, m_n, n_n
+
+    I = I_diag[1:] / np.arange(1, K + 1)[:, None]
+    score = S[1:] / np.arange(1, K + 1)[:, None]
+    S_inc = np.diff(S, axis=0)
+    score2 = (S_inc ** 2).cumsum(axis=0) / np.arange(1, K + 1)[:, None]
 
     print("finished")
+
+    plt.plot(1 / I[250:, 0]); plt.plot(1 / score2[250:, 0])
+    np.savetxt('./S_N=10000_K=10000_seed=20.txt', S)
+    np.savetxt('./I_diag_N=10000_K=10000_seed=20.txt', I_diag)
 
     # eng = HestonTransition(dY_seq=np.linspace(-1, 1, 100), dt=1, kappa=1, m=0.3 ** 2, sigma=0.3, rho=-0.5)
     #
