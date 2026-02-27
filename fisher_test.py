@@ -6,6 +6,7 @@ from numba import njit, prange
 from time import time
 from tqdm import trange
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize
 
 
 def _systematic_resample(weights: np.ndarray, rng: np.random.Generator):
@@ -31,7 +32,96 @@ def _heston_char(u, dt, v, kappa, m, sigma, rho):
 
 
 @njit(cache=True, parallel=True)
-def _log_p_dYn_given_vnm1_vn(n, vnm1, vn, dt, kappa, m, sigma, rho, u, E, pref, lam, dlogpref, d2logpref, dlam, d2lam, R_table, dlogR_table, d2logR_table, p_min, p_max, logp0, inv_dlogp, P, log_pi):
+def _log_p_dYn_given_vnm1_vn(n, vnm1, vn, dt, kappa, m, sigma, rho, u, E, pref, lam, R_table, p_min, p_max, logp0, inv_dlogp, P, log_pi):
+    """
+    Parallel batch evaluation for fixed n.
+    Returns:
+      ok    : (M,) uint8  (1 = success, 0 = failed/non-positive inversion)
+      logp  : (M,)
+      grad  : (M,4)
+      hdiag : (M,4)
+    """
+    M = vnm1.shape[0]
+    Ku = u.shape[0]
+
+    ok = np.ones(M, dtype=np.uint8)
+    logp = np.empty(M, dtype=np.float64)
+
+    # Same observed return for all pairs in this batch
+    Erow = E[n]  # shape (Ku,), contiguous if E is C-order and shape (T,Ku)
+
+    for i in prange(M):
+        a = vnm1[i]
+        b = vn[i]
+
+        # default outputs if failure
+        logp_i = np.nan
+
+        if a <= 0.0 or b <= 0.0:
+            ok[i] = 0
+            logp[i] = logp_i
+            continue
+
+        # endpoint combinations
+        s = a + b
+        d = b - a
+        p = np.sqrt(a * b)
+
+        # interpolate index on log p-grid
+        if p <= p_min:
+            j = 0
+            t = 0.0
+        elif p >= p_max:
+            j = P - 2
+            t = 1.0
+        else:
+            x = np.log(p)
+            y = (x - logp0) * inv_dlogp
+            j = int(y)
+            if j < 0:
+                j = 0
+                t = 0.0
+            elif j >= P - 1:
+                j = P - 2
+                t = 1.0
+            else:
+                t = y - j
+
+        omt = 1.0 - t
+
+        # mu_const = (rho/sigma) * (d - kappa*m*dt)
+        c = d - kappa * m * dt
+        mu_const = (rho / sigma) * c
+
+        # accumulator for Re(S0)
+        S0_re = 0.0
+
+        for k in range(Ku):
+            uk = u[k]
+
+            # interpolate R at p
+            Rk = omt * R_table[j, k] + t * R_table[j + 1, k]
+
+            # psi_k = pref_k * exp(lam_k*s + i*u_k*mu_const) * Rk
+            exp_arg = lam[k] * s + (1j * uk * mu_const)
+            psi_k = pref[k] * np.exp(exp_arg) * Rk
+
+            z = psi_k * Erow[k]
+            zr = z.real
+            S0_re += zr
+
+        # finalize
+        if (not np.isfinite(S0_re)) or (S0_re <= 0.0):
+            ok[i] = 0
+        else:
+            logp_i = np.log(S0_re) - log_pi
+
+        logp[i] = logp_i
+    return ok, logp
+
+
+@njit(cache=True, parallel=True)
+def _log_p_dYn_given_vnm1_vn_with_derivs(n, vnm1, vn, dt, kappa, m, sigma, rho, u, E, pref, lam, dlogpref, d2logpref, dlam, d2lam, R_table, dlogR_table, d2logR_table, p_min, p_max, logp0, inv_dlogp, P, log_pi):
     """
     Parallel batch evaluation for fixed n.
     Returns:
@@ -253,16 +343,16 @@ class Proposal:
         trunc = truncnorm(a=-mu_q / std_q, b=np.inf, loc=mu_q, scale=std_q)
         return trunc.logpdf(vn)
 
-    def sample_q_vn_given_vnm1_dYn(self, vnm1, dYn):
+    def sample_q_vn_given_vnm1_dYn(self, vnm1, dYn) -> np.ndarray:
         """Truncated Gaussian from Euler discretization"""
         mu_q = vnm1 + self.kappa * (self.m - vnm1) * self.dt + self.sigma * self.rho * dYn
         std_q = self.sigma * np.sqrt((1.0 - self.rho ** 2) * vnm1 * self.dt)
         trunc = truncnorm(a=-mu_q / std_q, b=np.inf, loc=mu_q, scale=std_q)
-        return trunc.rvs(random_state=self.rng)
+        return trunc.rvs(size=mu_q.shape, random_state=self.rng)
 
 
 class HestonTransition:
-    def __init__(self, dY_seq, dt, kappa, m, sigma, rho, *, U=200.0, K=4096, p_min=1e-10, p_max=5.0, P=2048, p_grid=None, fd_eps=1e-4):
+    def __init__(self, dY_seq, dt, kappa, m, sigma, rho, *, U=200.0, K=256, p_min=1e-10, p_max=5.0, P=32768, p_grid=None, fd_eps=1e-4):
         # --- observed returns
         self.dY_seq = np.asarray(dY_seq, dtype=np.float64)
         self.T = self.dY_seq.size
@@ -333,6 +423,35 @@ class HestonTransition:
     def log_p_dYn_given_vnm1_vn(self, n, vnm1, vn, *, raise_on_fail=True):
         """
         Batch version for fixed observation index n.
+        Evaluates log pdf for many (a,b) pairs.
+
+        Inputs:
+          n      : int
+          a_vec  : array-like
+          b_vec  : array-like (same shape as a_vec or broadcastable)
+
+        Returns:
+          logp   : shape S
+        """
+
+        n = int(n)
+        if n < 0 or n >= self.T:
+            raise IndexError(f"n must be in [0, {self.T - 1}]")
+
+        ok, logp = _log_p_dYn_given_vnm1_vn(n, vnm1, vn, self.dt, self.kappa, self.m, self.sigma, self.rho, self.u, self.E, self.pref, self.lam, self.R_table, self._p_min, self._p_max, self._logp0, self._inv_dlogp, self.P, np.log(np.pi))
+
+        if raise_on_fail and np.any(ok == 0):
+            bad = int(np.sum(ok == 0))
+            raise FloatingPointError(
+                f"Batch kernel failed for {bad} pair(s) "
+                "(non-positive/invalid Fourier inversion result or invalid a,b)."
+            )
+
+        return logp
+
+    def log_p_dYn_given_vnm1_vn_with_derivs(self, n, vnm1, vn, *, raise_on_fail=True):
+        """
+        Batch version for fixed observation index n.
         Evaluates (log pdf, gradient, diagonal Hessian) for many (a,b) pairs.
 
         Inputs:
@@ -350,13 +469,7 @@ class HestonTransition:
         if n < 0 or n >= self.T:
             raise IndexError(f"n must be in [0, {self.T - 1}]")
 
-        vnm1, vn = np.broadcast_arrays(np.asarray(vnm1, dtype=np.float64), np.asarray(vn, dtype=np.float64))
-        orig_shape = vnm1.shape
-
-        vnm1_flat = np.ascontiguousarray(vnm1.ravel())
-        vn_flat = np.ascontiguousarray(vn.ravel())
-
-        ok, logp_flat, grad_flat, hdiag_flat = _log_p_dYn_given_vnm1_vn(n, vnm1_flat, vn_flat, self.dt, self.kappa, self.m, self.sigma, self.rho, self.u, self.E, self.pref, self.lam, self.dlogpref, self.d2logpref, self.dlam, self.d2lam, self.R_table, self.dlogR_table, self.d2logR_table, self._p_min, self._p_max, self._logp0, self._inv_dlogp, self.P, np.log(np.pi))
+        ok, logp, grad, hdiag = _log_p_dYn_given_vnm1_vn_with_derivs(n, vnm1, vn, self.dt, self.kappa, self.m, self.sigma, self.rho, self.u, self.E, self.pref, self.lam, self.dlogpref, self.d2logpref, self.dlam, self.d2lam, self.R_table, self.dlogR_table, self.d2logR_table, self._p_min, self._p_max, self._logp0, self._inv_dlogp, self.P, np.log(np.pi))
 
         if raise_on_fail and np.any(ok == 0):
             bad = int(np.sum(ok == 0))
@@ -365,13 +478,40 @@ class HestonTransition:
                 "(non-positive/invalid Fourier inversion result or invalid a,b)."
             )
 
-        logp = logp_flat.reshape(orig_shape)
-        grad = grad_flat.reshape(orig_shape + (4,))
-        hdiag = hdiag_flat.reshape(orig_shape + (4,))
-
         return logp, grad, hdiag
 
     def log_p_vn_given_vnm1(self, vn, vnm1):
+        """
+        Exact CIR transition log-density and theta-derivatives (diag Hessian only)
+        for theta = (kappa, m, sigma, rho), where rho does NOT enter the transition.
+
+        Returns
+        -------
+        logf : ndarray or scalar
+            log f_theta(x | x_prev)
+        grad : ndarray
+            gradient wrt theta, shape (..., 4)
+            order = [d/dkappa, d/dm, d/dsigma, d/drho]
+        hess_diag : ndarray
+            diagonal second derivatives wrt theta, shape (..., 4)
+            order = [d2/dkappa2, d2/dm2, d2/dsigma2, d2/drho2]
+
+        Notes
+        -----
+        - Derivatives are computed by centered finite differences of the exact log-density.
+        - rho-derivatives are exactly zero.
+        """
+
+        # Base log-density
+        logf0 = _log_p_vn_given_vnm1(vn, vnm1, self.dt, self.kappa, self.m, self.sigma)
+
+        # Return scalars if scalar input
+        if logf0.ndim == 0:
+            return float(logf0)
+
+        return logf0
+
+    def log_p_vn_given_vnm1_with_derivs(self, vn, vnm1):
         """
         Exact CIR transition log-density and theta-derivatives (diag Hessian only)
         for theta = (kappa, m, sigma, rho), where rho does NOT enter the transition.
@@ -433,8 +573,13 @@ class HestonTransition:
         return logf0, grad, hdiag
 
     def log_p_vn_dYn_given_vnm1(self, n, vn, vnm1):
-        p, dp, d2p = self.log_p_dYn_given_vnm1_vn(n, vnm1, vn)
-        f, df, d2f = self.log_p_vn_given_vnm1(vn, vnm1)
+        p = self.log_p_dYn_given_vnm1_vn(n, vnm1, vn)
+        f = self.log_p_vn_given_vnm1(vn, vnm1)
+        return p + f
+
+    def log_p_vn_dYn_given_vnm1_with_derivs(self, n, vn, vnm1):
+        p, dp, d2p = self.log_p_dYn_given_vnm1_vn_with_derivs(n, vnm1, vn)
+        f, df, d2f = self.log_p_vn_given_vnm1_with_derivs(vn, vnm1)
         return p + f, dp + df, d2p + d2f
 
     def _compute_u_terms(self, kappa, m, sigma, rho):
@@ -590,134 +735,468 @@ class HestonTransition:
         self.d2logR_table = d2logR_table
 
 
+def paris_backward_indices_ar(
+    x_prev: np.ndarray,          # shape (N,)
+    w_prev: np.ndarray,          # shape (N,), must be normalized
+    x_next: np.ndarray,          # shape (N,)  (children)
+    f_density,                   # callable: f_density(x_next_vec, x_prev_vec) -> pdf vec
+    eps_bar: float,              # bound: f_density(x'|x) <= eps_bar on relevant support
+    N_tilde: int,                # number of backward draws per child
+    rng: np.random.Generator,
+    *,
+    max_rounds: int = 10_000,    # max AR iterations per j (batch loop)
+    fallback_exact: bool = True, # if True, exact O(N) sampling for remaining children
+) -> np.ndarray:
+    """
+    OW Algorithm 3 (Appendix B.2) in your notation:
+      sample J_{t+1}^{(i,j)} ~ proportional to w_prev[l] * f_theta(x_next[i] | x_prev[l])
+
+    Returns:
+      J : ndarray of shape (N, N_tilde), where J[i, j] is the sampled ancestor index for child i.
+    """
+    x_prev = np.asarray(x_prev, dtype=np.float64)
+    w_prev = np.asarray(w_prev, dtype=np.float64)
+    x_next = np.asarray(x_next, dtype=np.float64)
+
+    N = x_prev.size
+    if x_next.size != N:
+        raise ValueError("x_prev and x_next must have the same length N")
+    if w_prev.size != N:
+        raise ValueError("w_prev must have length N")
+    if N_tilde < 1:
+        raise ValueError("N_tilde must be >= 1")
+    if not np.isfinite(eps_bar) or eps_bar <= 0:
+        raise ValueError("eps_bar must be finite and > 0")
+
+    # normalize weights (robust)
+    s = w_prev.sum()
+    if not np.isfinite(s) or s <= 0:
+        raise ValueError("w_prev must sum to a positive finite number")
+    w_prev = w_prev / s
+
+    J = np.empty((N, N_tilde), dtype=np.int64)
+
+    # For each j, fill one column J[:, j]
+    for j in range(N_tilde):
+        # indices of children not yet accepted for this j
+        L = np.arange(N, dtype=np.int64)
+
+        rounds = 0
+        while L.size > 0:
+            rounds += 1
+            if rounds > max_rounds:
+                if not fallback_exact:
+                    raise RuntimeError("Accept-reject did not finish; increase eps_bar or max_rounds.")
+                # Exact fallback for the remaining children: O(|L|*N)
+                for idx in L:
+                    # unnormalized weights proportional to w_prev[l] * f(x_next[idx] | x_prev[l])
+                    fvals = f_density(np.full(N, x_next[idx], dtype=np.float64), x_prev)  # (N,)
+                    w = w_prev * fvals
+                    tot = w.sum()
+                    if tot <= 0 or not np.isfinite(tot):
+                        # if this happens, something is wrong with f_density or numerical underflow
+                        raise FloatingPointError("Fallback exact sampling failed: invalid weights.")
+                    w = w / tot
+                    J[idx, j] = rng.choice(N, p=w)
+                L = L[:0]
+                break
+
+            # propose ancestors I_k ~ Categorical(w_prev) for each remaining child
+            I = rng.choice(N, size=L.size, replace=True, p=w_prev)
+            U = rng.random(L.size)
+
+            # compute acceptance probabilities f(x_next[L] | x_prev[I]) / eps_bar
+            fvals = f_density(x_next[L], x_prev[I])  # must return shape (len(L),)
+            # If eps_bar is a true bound, probs <= 1 always. If not, you must fix eps_bar.
+            probs = fvals / eps_bar
+
+            # Guard: if eps_bar is violated, you can either raise or clip. Raising is safer.
+            if np.any(probs > 1.0 + 1e-12):
+                raise ValueError("eps_bar is not a valid bound (found f/eps_bar > 1).")
+
+            accept = U <= np.minimum(probs, 1.0)
+            # assign accepted indices
+            if np.any(accept):
+                J[L[accept], j] = I[accept]
+            # keep only rejected children
+            L = L[~accept]
+
+    return J
+
+
 if __name__ == '__main__':
-    init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.])
-    model1 = HestonModel(first_observed=1, init=init, dt=1., signature='1[1]_2d[1]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), warn=False)
-    model1.generate_observations(t_max=10000, inter_steps=250, seed=20, verbose=1)
+    for seed in [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]:
+        init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.])
+        model1 = HestonModel(first_observed=1, init=init, dt=1., signature='1[1]_2d[1]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), warn=False)
+        model1.generate_observations(t_max=200000, inter_steps=250, seed=seed, verbose=1)
 
-    #-----------------------------#
-    #### Algorithm 1 of PDS #######
-    #-----------------------------#
+        #-----------------------------#
+        #### Algorithm 2 of OW #######
+        #-----------------------------#
 
-    # dY_seq = model1.observations[1:, 1]
-    # kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
-    # dt = 1.
-    # N = 1000
-    # rng = np.random.default_rng(seed=20)
-    # K = len(dY_seq)
-    # proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
-    # transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+        dY_seq = model1.observations[1:, 1]
+        kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
+        dt = 1.
+        N = 1000
+        N_tilde = 100
+        eps_bar = np.exp(-minimize(lambda v: -_log_p_vn_given_vnm1(v[1], v[0], dt=1, kappa=1., m=0.16, sigma=0.3), x0=[0.1, 0.1], bounds=((1e-18, 5), (1e-18, 5))).fun)
+        rng = np.random.default_rng(seed=20)
+        K = len(dY_seq)
+        proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
+        transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+
+        # Warm-up compile
+        _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+        _ = transition.log_p_dYn_given_vnm1_vn_with_derivs(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+
+        # Initial particles
+        vnm1 = np.repeat(0.3 ** 2, N)
+        m_nm1 = np.zeros((N, 4))
+        M_nm1 = np.zeros((N, 4))
+        logweights_nm1 = np.repeat(-np.log(N), N)
+
+        S = np.zeros((K, 4))
+        Sigma_diag = np.zeros((K, 4))
+
+        for n in trange(K, desc='Running particle filter'):
+            ## Step A
+            resample_logweights = logweights_nm1 + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+            resample_weights = np.exp(resample_logweights - resample_logweights.max())
+            resample_weights = resample_weights / resample_weights.sum()
+            resample_indices = _systematic_resample(resample_weights, rng)
+
+            ## Step B & C
+            vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1[resample_indices], dY_seq[n])
+            logpdf = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1[resample_indices])
+            logweights_n = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1[resample_indices], dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1[resample_indices])
+            weights_n = np.exp(logweights_n - logweights_n.max())
+            weights_n = weights_n / weights_n.sum()
+
+            J_ij = paris_backward_indices_ar(vnm1, weights_nm1, vn, lambda vn, vnm1: np.exp(transition.log_p_vn_given_vnm1(vn, vnm1)), eps_bar, N_tilde, rng=rng)
+            logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1_with_derivs(n, vn[:, None], vnm1[J_ij])
+
+            m_n = np.mean(m_nm1[J_ij] + deriv, axis=1)
+            M_n = np.mean(M_nm1[J_ij] + 2 * m_nm1[J_ij] * deriv + deriv ** 2 + hess, axis=1)
+            S[n] = weights_n @ m_n
+            Sigma_diag[n] = S[n] ** 2 - weights_n @ M_n
+
+            vnm1, m_nm1, M_nm1, logweights_nm1, weights_nm1 = vn, m_n, M_n, logweights_n, weights_n
+
+        #-----------------------------#
+        #### Algorithm 1 of PDS #######
+        #-----------------------------#
+
+        # dY_seq = model1.observations[1:, 1]
+        # kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
+        # dt = 1.
+        # N = 1000
+        # rng = np.random.default_rng(seed=20)
+        # K = len(dY_seq)
+        # proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
+        # transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+        #
+        # # Warm-up compile
+        # _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+        #
+        # # Initial particles
+        # vnm1 = np.repeat(0.3 ** 2, N)
+        # alpha_nm1 = np.zeros((N, 4))
+        # beta_nm1 = np.zeros((N, 4))
+        # logweights = np.repeat(-np.log(N), N)
+        #
+        # S = np.zeros((K, 4))
+        # Sigma_diag = np.zeros((K, 4))
+        #
+        # for n in trange(K, desc='Running particle filter'):
+        #     resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+        #     resample_weights = np.exp(resample_logweights - resample_logweights.max())
+        #     resample_weights = resample_weights / resample_weights.sum()
+        #     resample_indices = _systematic_resample(resample_weights, rng)
+        #     vnm1, alpha_nm1, beta_nm1 = vnm1[resample_indices], alpha_nm1[resample_indices], beta_nm1[resample_indices]
+        #
+        #     vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
+        #     logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
+        #     logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+        #     weights = np.exp(logweights - logweights.max())
+        #     weights = weights / weights.sum()
+        #
+        #     alpha_n = alpha_nm1 + deriv
+        #     beta_n = beta_nm1 + hess
+        #     S[n] = weights @ alpha_n
+        #     Sigma_diag[n] = S[n] ** 2 - weights @ (alpha_n ** 2 + beta_n)
+        #
+        #     vnm1, alpha_nm1, beta_nm1 = vn, alpha_n, beta_n
+        #
+        # print("finished")
+
+
+        #-----------------------------#
+        #### Algorithm 2 of NFM #######
+        #-----------------------------#
+
+        dY_seq = model1.observations[1:, 1]
+        kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
+        dt = 1.
+        N = 20000
+        lamb = 0.99
+        h2 = 1 - lamb ** 2
+        rng = np.random.default_rng(seed=seed)
+        K = len(dY_seq)
+        proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
+        transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+        # transition2 = HestonTransitionTrap(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+
+        # Warm-up compile
+        _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+        # _ = transition2.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+
+        # Initial particles
+        vnm1 = np.repeat(0.3 ** 2, N)
+        m_nm1 = np.zeros((N, 4))
+        n_nm1 = np.zeros((N, 4))
+        logweights = np.repeat(-np.log(N), N)
+        weights = np.repeat(1 / N, N)
+
+        V_n = np.zeros(4)
+        B_nm1 = np.zeros(4)
+
+        S = np.zeros((K + 1, 4))
+        I_diag = np.zeros((K + 1, 4))
+
+        for n in trange(K, desc='Running particle filter'):
+            V_n += weights @ ((m_nm1 - S[n]) ** 2)
+
+            resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+            resample_weights = np.exp(resample_logweights - resample_logweights.max())
+            resample_weights = resample_weights / resample_weights.sum()
+            resample_indices = _systematic_resample(resample_weights, rng)
+            vnm1, m_nm1, n_nm1 = vnm1[resample_indices], m_nm1[resample_indices], n_nm1[resample_indices]
+
+            vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
+            logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
+            # logpdf2, deriv2, hess2 = transition2.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
+            logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+            weights = np.exp(logweights - logweights.max())
+            weights = weights / weights.sum()
+
+            m_n = lamb * m_nm1 + (1 - lamb) * S[n] + deriv
+            n_n = lamb * n_nm1 + (1 - lamb) * B_nm1 + hess
+
+            S[n + 1] = weights @ m_n
+            I_diag[n + 1] = S[n + 1] ** 2 - weights @ (m_n ** 2 + n_n) - h2 * V_n
+
+            B_nm1 = weights @ n_n
+            vnm1, m_nm1, n_nm1 = vn, m_n, n_n
+
+        print("finished")
+
+        np.savetxt('./S_N=20000_K=200000_seed={}_Ku=256_P=32768.txt'.format(seed), S)
+        np.savetxt('./I_diag_N=20000_K=200000_seed={}_Ku=256_P=32768.txt'.format(seed), I_diag)
+
+        # S_list, I_diag_list = [], []
+        # score_list, score2_list, I_list = [], [], []
+        # K = 200000
+
+        # for seed in [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]:
+        #     S_list.append(np.loadtxt('./S_N=10000_K=200000_seed={}_Ku=256_P=32768.txt'.format(seed)))
+        #     I_diag_list.append(np.loadtxt('./I_diag_N=10000_K=200000_seed={}_Ku=256_P=32768.txt'.format(seed)))
+        #     I_list.append(I_diag_list[-1][1:] / np.arange(1, K + 1)[:, None])
+        #     score_list.append(S_list[-1][1:] / np.arange(1, K + 1)[:, None])
+        #     S_inc = np.diff(S_list[-1], axis=0)
+        #     score2_list.append((S_inc ** 2).cumsum(axis=0) / np.arange(1, K + 1)[:, None])
+        #
+        # for i in range(12):
+        #     plt.plot(1 / I_list[i][:, 0], color='C0', alpha=0.5, linewidth=1)
+        #     plt.plot(1 / score2_list[i][:, 0], color='C1', alpha=0.5, linewidth=1)
+        # plt.ylim(0, 40)
+        #
+        # for i in range(12):
+        #     plt.plot(1 / I_list[i][:, 1], color='C0', alpha=0.5, linewidth=1)
+        #     plt.plot(1 / score2_list[i][:, 1], color='C1', alpha=0.5, linewidth=1)
+        # plt.ylim(0.03, 0.07)
+        #
+        # for i in range(12):
+        #     plt.plot(1 / I_list[i][:, 2], color='C0', alpha=0.5, linewidth=1)
+        #     plt.plot(1 / score2_list[i][:, 2], color='C1', alpha=0.5, linewidth=1)
+        # plt.ylim(0, 1.5)
+        #
+        # for i in range(12):
+        #     plt.plot(1 / I_list[i][:, 3], color='C0', alpha=0.5, linewidth=1)
+        #     plt.plot(1 / score2_list[i][:, 3], color='C1', alpha=0.5, linewidth=1)
+        # plt.ylim(3, 9)
+
+
+    for seed in [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]:
+        init = InitialDistribution(dist='Dirac', hyper=[0.3**2, 0.])
+        model1 = HestonModel(first_observed=1, init=init, dt=1., signature='1[1]_2d[1]', true_param=np.array([1, 0.4**2, 0.3, -0.5]), warn=False)
+        model1.generate_observations(t_max=200000, inter_steps=250, seed=seed, verbose=1)
+
+        #-----------------------------#
+        #### Algorithm 1 of PDS #######
+        #-----------------------------#
+
+        # dY_seq = model1.observations[1:, 1]
+        # kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
+        # dt = 1.
+        # N = 1000
+        # rng = np.random.default_rng(seed=20)
+        # K = len(dY_seq)
+        # proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
+        # transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+        #
+        # # Warm-up compile
+        # _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+        #
+        # # Initial particles
+        # vnm1 = np.repeat(0.3 ** 2, N)
+        # alpha_nm1 = np.zeros((N, 4))
+        # beta_nm1 = np.zeros((N, 4))
+        # logweights = np.repeat(-np.log(N), N)
+        #
+        # S = np.zeros((K, 4))
+        # Sigma_diag = np.zeros((K, 4))
+        #
+        # for n in trange(K, desc='Running particle filter'):
+        #     resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+        #     resample_weights = np.exp(resample_logweights - resample_logweights.max())
+        #     resample_weights = resample_weights / resample_weights.sum()
+        #     resample_indices = _systematic_resample(resample_weights, rng)
+        #     vnm1, alpha_nm1, beta_nm1 = vnm1[resample_indices], alpha_nm1[resample_indices], beta_nm1[resample_indices]
+        #
+        #     vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
+        #     logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
+        #     logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+        #     weights = np.exp(logweights - logweights.max())
+        #     weights = weights / weights.sum()
+        #
+        #     alpha_n = alpha_nm1 + deriv
+        #     beta_n = beta_nm1 + hess
+        #     S[n] = weights @ alpha_n
+        #     Sigma_diag[n] = S[n] ** 2 - weights @ (alpha_n ** 2 + beta_n)
+        #
+        #     vnm1, alpha_nm1, beta_nm1 = vn, alpha_n, beta_n
+        #
+        # print("finished")
+
+
+        #-----------------------------#
+        #### Algorithm 2 of NFM #######
+        #-----------------------------#
+
+        dY_seq = model1.observations[1:, 1]
+        kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
+        dt = 1.
+        N = 10000
+        lamb = 0.995
+        h2 = 1 - lamb ** 2
+        rng = np.random.default_rng(seed=seed)
+        K = len(dY_seq)
+        proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
+        transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+        # transition2 = HestonTransitionTrap(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
+
+        # Warm-up compile
+        _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+        # _ = transition2.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+
+        # Initial particles
+        vnm1 = np.repeat(0.3 ** 2, N)
+        m_nm1 = np.zeros((N, 4))
+        n_nm1 = np.zeros((N, 4))
+        logweights = np.repeat(-np.log(N), N)
+        weights = np.repeat(1 / N, N)
+
+        V_n = np.zeros(4)
+        B_nm1 = np.zeros(4)
+
+        S = np.zeros((K + 1, 4))
+        I_diag = np.zeros((K + 1, 4))
+
+        for n in trange(K, desc='Running particle filter'):
+            V_n += weights @ ((m_nm1 - S[n]) ** 2)
+
+            resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+            resample_weights = np.exp(resample_logweights - resample_logweights.max())
+            resample_weights = resample_weights / resample_weights.sum()
+            resample_indices = _systematic_resample(resample_weights, rng)
+            vnm1, m_nm1, n_nm1 = vnm1[resample_indices], m_nm1[resample_indices], n_nm1[resample_indices]
+
+            vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
+            logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
+            # logpdf2, deriv2, hess2 = transition2.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
+            logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
+            weights = np.exp(logweights - logweights.max())
+            weights = weights / weights.sum()
+
+            m_n = lamb * m_nm1 + (1 - lamb) * S[n] + deriv
+            n_n = lamb * n_nm1 + (1 - lamb) * B_nm1 + hess
+
+            S[n + 1] = weights @ m_n
+            I_diag[n + 1] = S[n + 1] ** 2 - weights @ (m_n ** 2 + n_n) - h2 * V_n
+
+            B_nm1 = weights @ n_n
+            vnm1, m_nm1, n_nm1 = vn, m_n, n_n
+
+        print("finished")
+
+        np.savetxt('./S_N=10000_K=200000_seed={}_Ku=256_P=32768_lam=0995.txt'.format(seed), S)
+        np.savetxt('./I_diag_N=10000_K=200000_seed={}_Ku=256_P=32768_lam=0995.txt'.format(seed), I_diag)
+
+        # S_list, I_diag_list = [], []
+        # score_list, score2_list, I_list = [], [], []
+        # K = 200000
+
+        # for seed in [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]:
+        #     S_list.append(np.loadtxt('./S_N=10000_K=200000_seed={}_Ku=256_P=32768.txt'.format(seed)))
+        #     I_diag_list.append(np.loadtxt('./I_diag_N=10000_K=200000_seed={}_Ku=256_P=32768.txt'.format(seed)))
+        #     I_list.append(I_diag_list[-1][1:] / np.arange(1, K + 1)[:, None])
+        #     score_list.append(S_list[-1][1:] / np.arange(1, K + 1)[:, None])
+        #     S_inc = np.diff(S_list[-1], axis=0)
+        #     score2_list.append((S_inc ** 2).cumsum(axis=0) / np.arange(1, K + 1)[:, None])
+        #
+        # for i in range(12):
+        #     plt.plot(1 / I_list[i][:, 0], color='C0', alpha=0.5, linewidth=1)
+        #     plt.plot(1 / score2_list[i][:, 0], color='C1', alpha=0.5, linewidth=1)
+        # plt.ylim(0, 40)
+        #
+        # for i in range(12):
+        #     plt.plot(1 / I_list[i][:, 1], color='C0', alpha=0.5, linewidth=1)
+        #     plt.plot(1 / score2_list[i][:, 1], color='C1', alpha=0.5, linewidth=1)
+        # plt.ylim(0.03, 0.07)
+        #
+        # for i in range(12):
+        #     plt.plot(1 / I_list[i][:, 2], color='C0', alpha=0.5, linewidth=1)
+        #     plt.plot(1 / score2_list[i][:, 2], color='C1', alpha=0.5, linewidth=1)
+        # plt.ylim(0, 1.5)
+        #
+        # for i in range(12):
+        #     plt.plot(1 / I_list[i][:, 3], color='C0', alpha=0.5, linewidth=1)
+        #     plt.plot(1 / score2_list[i][:, 3], color='C1', alpha=0.5, linewidth=1)
+        # plt.ylim(3, 9)
+
+
+    # #
+    # S = np.loadtxt('./S_N=10000_K=50000_seed=20_Ku=512_P=32768.txt')
+    # I_diag = np.loadtxt('./I_diag_N=10000_K=50000_seed=20_Ku=512_P=32768.txt')
+    # S_1000 = np.loadtxt('./S_N=10000_K=50000_seed=21_Ku=256_P=32768.txt')
+    # I_diag_1000 = np.loadtxt('./I_diag_N=10000_K=50000_seed=21_Ku=256_P=32768.txt')
+    # #
+    # I = I_diag[1:] / np.arange(1, K + 1)[:, None]
+    # score = S[1:] / np.arange(1, K + 1)[:, None]
+    # S_inc = np.diff(S, axis=0)
+    # score2 = (S_inc ** 2).cumsum(axis=0) / np.arange(1, K + 1)[:, None]
     #
-    # # Warm-up compile
-    # _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
+    # I_1000 = I_diag_1000[1:] / np.arange(1, K + 1)[:, None]
+    # score_1000 = S_1000[1:] / np.arange(1, K + 1)[:, None]
+    # S_inc_1000 = np.diff(S_1000, axis=0)
+    # score2_1000 = (S_inc_1000 ** 2).cumsum(axis=0) / np.arange(1, K + 1)[:, None]
     #
-    # # Initial particles
-    # vnm1 = np.repeat(0.3 ** 2, N)
-    # alpha_nm1 = np.zeros((N, 4))
-    # beta_nm1 = np.zeros((N, 4))
-    # logweights = np.repeat(-np.log(N), N)
-    #
-    # S = np.zeros((K, 4))
-    # Sigma_diag = np.zeros((K, 4))
-    #
-    # for n in trange(K, desc='Running particle filter'):
-    #     resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
-    #     resample_weights = np.exp(resample_logweights - resample_logweights.max())
-    #     resample_weights = resample_weights / resample_weights.sum()
-    #     resample_indices = _systematic_resample(resample_weights, rng)
-    #     vnm1, alpha_nm1, beta_nm1 = vnm1[resample_indices], alpha_nm1[resample_indices], beta_nm1[resample_indices]
-    #
-    #     vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
-    #     logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
-    #     logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
-    #     weights = np.exp(logweights - logweights.max())
-    #     weights = weights / weights.sum()
-    #
-    #     alpha_n = alpha_nm1 + deriv
-    #     beta_n = beta_nm1 + hess
-    #     S[n] = weights @ alpha_n
-    #     Sigma_diag[n] = S[n] ** 2 - weights @ (alpha_n ** 2 + beta_n)
-    #
-    #     vnm1, alpha_nm1, beta_nm1 = vn, alpha_n, beta_n
-    #
-    # print("finished")
-
-
-    #-----------------------------#
-    #### Algorithm 2 of NFM #######
-    #-----------------------------#
-
-    dY_seq = model1.observations[1:, 1]
-    kappa, m, sigma, rho = 1., 0.16, 0.3, -0.5
-    dt = 1.
-    N = 10000
-    lamb = 0.99
-    h2 = 1 - lamb ** 2
-    rng = np.random.default_rng(seed=20)
-    K = len(dY_seq)
-    proposal = Proposal(dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho, rng=rng)
-    transition = HestonTransition(dY_seq=dY_seq, dt=dt, kappa=kappa, m=m, sigma=sigma, rho=rho)
-
-    # Warm-up compile
-    _ = transition.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
-
-    # Initial particles
-    vnm1 = np.repeat(0.3 ** 2, N)
-    m_nm1 = np.zeros((N, 4))
-    n_nm1 = np.zeros((N, 4))
-    logweights = np.repeat(-np.log(N), N)
-    weights = np.repeat(1 / N, N)
-
-    V_n = np.zeros(4)
-    B_nm1 = np.zeros(4)
-
-    S = np.zeros((K + 1, 4))
-    I_diag = np.zeros((K + 1, 4))
-
-    for n in trange(K, desc='Running particle filter'):
-        V_n += weights @ ((m_nm1 - S[n]) ** 2)
-
-        resample_logweights = logweights + proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
-        resample_weights = np.exp(resample_logweights - resample_logweights.max())
-        resample_weights = resample_weights / resample_weights.sum()
-        resample_indices = _systematic_resample(resample_weights, rng)
-        vnm1, m_nm1, n_nm1 = vnm1[resample_indices], m_nm1[resample_indices], n_nm1[resample_indices]
-
-        vn = proposal.sample_q_vn_given_vnm1_dYn(vnm1, dY_seq[n])
-        logpdf, deriv, hess = transition.log_p_vn_dYn_given_vnm1(n, vn, vnm1)
-        logweights = logpdf - proposal.log_q_vn_given_vnm1_dYn(vn, vnm1, dY_seq[n]) - proposal.log_q_dYn_given_vnm1(dY_seq[n], vnm1)
-        weights = np.exp(logweights - logweights.max())
-        weights = weights / weights.sum()
-
-        m_n = lamb * m_nm1 + (1 - lamb) * S[n] + deriv
-        n_n = lamb * n_nm1 + (1 - lamb) * B_nm1 + hess
-
-        S[n + 1] = weights @ m_n
-        I_diag[n + 1] = S[n + 1] ** 2 - weights @ (m_n ** 2 + n_n) - h2 * V_n
-
-        B_nm1 = weights @ n_n
-        vnm1, m_nm1, n_nm1 = vn, m_n, n_n
-
-    I = I_diag[1:] / np.arange(1, K + 1)[:, None]
-    score = S[1:] / np.arange(1, K + 1)[:, None]
-    S_inc = np.diff(S, axis=0)
-    score2 = (S_inc ** 2).cumsum(axis=0) / np.arange(1, K + 1)[:, None]
-
-    print("finished")
-
-    plt.plot(1 / I[250:, 0]); plt.plot(1 / score2[250:, 0])
-    np.savetxt('./S_N=10000_K=10000_seed=20.txt', S)
-    np.savetxt('./I_diag_N=10000_K=10000_seed=20.txt', I_diag)
-
-    # eng = HestonTransition(dY_seq=np.linspace(-1, 1, 100), dt=1, kappa=1, m=0.3 ** 2, sigma=0.3, rho=-0.5)
-    #
-    # # Warm-up compile (small batch is enough)
-    # _ = eng.log_p_dYn_given_vnm1_vn(n=0, vnm1=np.array([0.03, 0.04]), vn=np.array([0.05, 0.06]), raise_on_fail=False)
-    #
-    # tic = time()
-    # f = eng.log_p_vn_dYn_given_vnm1(74, np.linspace(0.3**2, 0.4 ** 2, 10000), np.linspace(1e-7, 0.2 ** 2, 10000))
-    # toc = time()
-    # print(toc - tic)
-    # print(f[0])
-    # print(f[1])
-    # print(f[2])
+    # plt.plot(I)
+    # plt.plot(I_1000)
+    # plt.figure()
+    # plt.plot(score2)
+    # plt.plot(score2_1000)
+    # plt.figure()
+    # plt.plot(score)
+    # plt.plot(score_1000)
+    # plt.show()
